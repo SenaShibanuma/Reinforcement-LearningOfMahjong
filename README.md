@@ -1,0 +1,2 @@
+# Reinforcement-LearningOfMahjong
+transformerの麻雀AIをローカルで強化学習させる
