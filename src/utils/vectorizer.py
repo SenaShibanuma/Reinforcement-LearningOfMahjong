@@ -48,7 +48,7 @@ def vectorize_choice(choice_str):
             'PUNG': 4, 'CHII': 5, 'DAIMINKAN': 6, 
             'ANKAN': 7, 'KAKAN': 8,
             'PASS': 9,
-            'KYUUSHU_KYUUHAI': 10 # 新しいアクションを追加
+            'KYUUSHU_KYUUHAI': 10 # BUG FIX: 新しいアクションを追加
         }
         vec[1] = action_type_ids.get(action_type, 0)
         if action_type == 'RIICHI': 
@@ -59,4 +59,3 @@ def vectorize_choice(choice_str):
             vec[2] = int(parts[2])
 
     return vec
-

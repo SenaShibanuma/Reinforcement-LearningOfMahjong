@@ -142,6 +142,7 @@ class Trainer:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             filename = os.path.join(LOG_DIR, f"round_E{round_num+1}-{honba}_{timestamp}.json")
             
+            # BUG FIX: JSONシリアライズできないオブジェクトをフィルタリングする
             loggable_events = []
             for event in game_state.get('events', []):
                 loggable_event = {}
@@ -157,4 +158,3 @@ class Trainer:
 
         except Exception as e:
             print(f"Error saving log file: {e}")
-

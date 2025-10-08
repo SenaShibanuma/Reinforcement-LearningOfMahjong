@@ -13,17 +13,23 @@ class MahjongAgent:
     def __init__(self, model_path=None):
         """
         エージェントを初期化し、学習済みモデルを読み込む。
+        モデルパスが存在すればモデルをロードし、なければ新規作成する。
         """
         print("Initializing Mahjong Agent...")
-        self.model = build_masked_transformer()
-        # モデルをコンパイル
+        if model_path:
+            try:
+                print(f"Loading model from {model_path}...")
+                self.model = tf.keras.models.load_model(model_path)
+            except Exception as e:
+                print(f"Error loading model: {e}. Building a new model instead.")
+                self.model = build_masked_transformer()
+        else:
+            print("Warning: No model path provided. Building a new model.")
+            self.model = build_masked_transformer()
+
+        # モデルの学習用設定をコンパイル
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
         self.loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-        if model_path:
-            print(f"Loading weights from {model_path}...")
-            self.model.load_weights(model_path)
-        else:
-            print("Warning: No model path provided. Agent is using initial weights.")
     
     def choose_action(self, context_events, choice_strs, player_pov, is_training=False):
         """
@@ -98,7 +104,6 @@ class MahjongAgent:
 
         for obs, pov in zip(observations, povs):
             context_events, choice_strs = obs
-            # BUG FIX: ハードコードされていた '0' を、実際のプレイヤー視点 'pov' に修正
             context_vec = [vectorize_event(e, pov) for e in context_events]
             choice_vecs = [vectorize_choice(c) for c in choice_strs]
             

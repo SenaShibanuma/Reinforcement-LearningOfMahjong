@@ -1,86 +1,109 @@
-# 麻雀AI強化学習プロジェクト
+# Reinforcement-LearningOfMahjong
 
-Transformerベースの麻雀AIを、ローカルのARM CPU環境で強化学習させることを目的としたプロジェクトです。自己対戦を通じてAIを継続的に強化し、人間と同等、あるいはそれ以上の雀力を持つAIエージェントを育成することを目指します。
+Transformerベースの麻雀AIをローカル環境で強化学習させることを目的としたプロジェクトです。自己対戦を通じてデータ収集・モデル更新を繰り返し、より高い雀力を持つエージェントを育成します。
+
+---
 
 ## 目次
+- 概要
+- 動作環境
+- セットアップ手順
+- 実行方法
+- ディレクトリ構成
+- ドキュメント
+- 更新履歴
 
-- [概要](#概要)
-- [プロジェクト目標](#プロジェクト目標)
-- [動作環境](#動作環境)
-- [ディレクトリ構成](#ディレクトリ構成)
-- [ドキュメント](#ドキュメント)
-- [貢献](#貢献)
-- [ライセンス](#ライセンス)
+---
 
 ## 概要
+本プロジェクトは以下の強化学習サイクルを回します：  
+自己対戦 → データ収集 → モデル更新。  
+モデルは主にTransformerを用いて設計されています。
 
-本プロジェクトは、自己対戦による強化学習サイクル（自己対戦 → データ収集 → モデル更新）を回し、Transformer を中心にしたモデルで麻雀プレイヤーを育成します。設計は軽量化と ARM アーキテクチャ上での実行効率を重視します。
+---
 
-## プロジェクト目標
+## 動作環境（確認済み）
+- OS: Windows  
+- Python: 3.10.x (64-bit)  
+- 主要ライブラリ:
+  - tensorflow-cpu==2.10
+  - tensorflow-directml-plugin（GPU利用時）
+  - numpy==1.23.5
+  - mahjong
 
-- ARM アーキテクチャの CPU（Apple Silicon、Raspberry Pi 等）上で実行可能な高性能な麻雀AIを開発する。
-- 強化学習のサイクルを自動化し、効率的に自己対戦を行えるシステムを構築する。
-- 学習の進捗を可視化し、定量的に評価できる仕組みを整備する。
+注意: TensorFlow 2.10 は NumPy 2.x 系と互換性がないため、指定された NumPy バージョンを使用してください。詳細は requirements.txt を参照してください。
 
-## 動作環境
+---
 
-- CPU アーキテクチャ: ARM64 (Apple Silicon, Raspberry Pi など)
-- プログラミング言語: Python 3.9+
-- 主要ライブラリ（検討中）: PyTorch / TensorFlow / JAX など
+## セットアップ手順
 
-必要なパッケージやセットアップ手順は `doc/environment_setup.md` にまとめる予定です。
+1. プロジェクトルートへ移動
+```powershell
+cd c:\Work\Reinforcement-LearningOfMahjong
+```
 
-## ディレクトリ構成
+2. 仮想環境の作成と有効化（PowerShell）
+```powershell
+# 初回のみ
+python -m venv .venv
 
-プロジェクトの想定ディレクトリ構成は以下の通りです。実際のファイル配置は今後変更されることがあります。
+# 有効化
+.\.venv\Scripts\Activate.ps1
+```
 
+3. pip を最新にして依存関係をインストール
+```powershell
+python -m pip install --upgrade pip
+pip install -r requirements.txt
+```
+
+---
+
+## 実行方法
+
+1. （任意）初期学習モデルを配置  
+学習のベースとなるモデルファイルがある場合、プロジェクトルートに `models/initial_model.keras` を配置します。無ければランダム初期重みで開始します。
+
+2. 強化学習を開始
+```powershell
+python main.py
+```
+実行成功後、コンソールに自己対戦のログが表示され、1ゲーム終了ごとに学習が行われます。
+
+---
+
+## ディレクトリ構成（概要）
 ```
 .
 ├── .gitignore
 ├── README.md
-├── doc/
-│   ├── architecture.md       # システム全体の設計
-│   ├── development_plan.md   # 開発計画とロードマップ
-│   └── environment_setup.md  # 開発環境の構築手順
-├── src/                      # ソースコード
-│   ├── agent/                # AIエージェント (モデル定義、思考エンジン)
-│   ├── env/                  # 麻雀の環境 (ルールエンジン、状態遷移)
-│   ├── train/                # 強化学習のメインループ
-│   └── utils/                # 共通ユーティリティ
-└── tests/                    # テストコード
+├── main.py
+├── requirements.txt
+├── models/                # (任意) initial_model.keras を置く
+├── src/
+│   ├── agent/             # モデル定義・思考エンジン
+│   ├── constants.py
+│   ├── env/               # ルールエンジン、状態遷移
+│   │   └── deck.py        # 牌山管理クラス（自作）
+│   ├── train/             # 強化学習ループ
+│   └── utils/             # 共通ユーティリティ
+└── tests/                 # テストコード
 ```
-
-### 各ディレクトリの役割（簡易）
-
-- `doc/` : 設計・開発計画・環境構築手順などのドキュメントを格納します。
-- `src/agent/` : モデル定義、推論／探索ロジックを実装します。
-- `src/env/` : 麻雀ルールエンジンとゲーム状態遷移を扱います。
-- `src/train/` : 強化学習ループ（自己対戦、データ収集、学習）を実装します。
-- `src/utils/` : ロギング、データ入出力、ユーティリティ関数を配置します。
-- `tests/` : ユニットテストや統合テストを置きます。
-
-## ドキュメント
-
-詳細な設計・環境構築・開発計画は `doc/` 配下に記載します。現時点で用意する予定のファイル例：
-
-- `doc/architecture.md` — システム全体の設計
-- `doc/development_plan.md` — 開発ロードマップ
-- `doc/environment_setup.md` — 環境構築手順（Python 仮想環境、依存関係、ARM 向け注意点）
-
-## 貢献
-
-貢献歓迎です。Issue や Pull Request を送ってください。貢献ガイドは将来的に追加予定です。
-
-貢献の一例:
-
-- バグ修正
-- テスト追加
-- モデルや学習パイプラインの改善
-
-## ライセンス
-
-ライセンスについては追って記載します（現時点では未設定）。
 
 ---
 
-最終更新: ここに日付を追加してください。
+## ドキュメント
+- doc/architecture.md — システム設計  
+- doc/model_architecture.md — モデル入出力仕様  
+- doc/code_structure.md — コード構造説明  
+- doc/development_plan.md — 開発ロードマップ
+
+---
+
+## 備考
+- Windows 環境での実行手順を想定しています。PowerShell を推奨します。  
+- GPU を使う場合は tensorflow-directml-plugin の導入と設定を確認してください。
+
+---
+
+最終更新: 2025-10-08
