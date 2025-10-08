@@ -1,0 +1,3 @@
+tensorflow-cpu==2.10
+tensorflow-directml-plugin
+mahjong
