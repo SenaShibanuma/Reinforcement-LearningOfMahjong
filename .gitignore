@@ -206,3 +206,5 @@ __marimo__/
 
 # models
 models/
+
+logs/

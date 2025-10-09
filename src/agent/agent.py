@@ -3,8 +3,10 @@
 AIエージェントを定義するファイル。
 モデルを読み込み、観測から行動を決定する責務を持つ。
 """
+import os
 import numpy as np
 import tensorflow as tf
+import random
 from src.agent.model import build_masked_transformer
 from src.utils.vectorizer import vectorize_event, vectorize_choice
 from src.constants import MAX_CONTEXT_LENGTH, MAX_CHOICES
@@ -16,7 +18,7 @@ class MahjongAgent:
         モデルパスが存在すればモデルをロードし、なければ新規作成する。
         """
         print("Initializing Mahjong Agent...")
-        if model_path:
+        if model_path and os.path.exists(model_path):
             try:
                 print(f"Loading model from {model_path}...")
                 self.model = tf.keras.models.load_model(model_path)
@@ -30,7 +32,7 @@ class MahjongAgent:
         # モデルの学習用設定をコンパイル
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
         self.loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-    
+
     def choose_action(self, context_events, choice_strs, player_pov, is_training=False):
         """
         現在の観測情報(context, choices)から、実行すべき行動を選択する。
@@ -64,15 +66,23 @@ class MahjongAgent:
 
         # 3. Predict
         model_inputs = [padded_context, padded_choices, mask]
-        logits = self.model.predict(model_inputs, verbose=0)
+        
+        # パフォーマンス向上のため、predict()ではなくモデルを直接呼び出す
+        logits = self.model(model_inputs, training=False)
         
         # 4. Convert logits to probabilities
-        probabilities = tf.nn.softmax(logits[0][:len(choice_strs)]).numpy()
+        # 非常に大きな/小さなlogit値をクリップして、softmaxの計算を安定させる
+        valid_logits = tf.clip_by_value(logits[0][:len(choice_strs)], -10.0, 10.0)
+        probabilities = tf.nn.softmax(valid_logits).numpy()
         
+        # 確率の合計が1になるように再正規化（浮動小数点誤差対策）
+        probabilities /= np.sum(probabilities)
+
         # 5. Choose action
         if is_training:
             # 学習中は、確率分布に従ってランダムに行動を選択（探索）
-            selected_action = np.random.choice(choice_strs, p=probabilities)
+            selected_action_index = np.random.choice(len(choice_strs), p=probabilities)
+            selected_action = choice_strs[selected_action_index]
         else:
             # 本番（評価）では、最も確率の高い行動を選択（活用）
             best_action_index = np.argmax(probabilities)
@@ -82,50 +92,63 @@ class MahjongAgent:
         
         return selected_action, action_probs
 
-    def learn(self, experiences):
+    def learn(self, experiences, batch_size=64):
         """
-        与えられた経験データからモデルを学習する (REINFORCEアルゴリズムの簡易版)。
+        与えられた経験データからバッチ単位でモデルを学習する。
         
         Args:
             experiences (list): (observation, action_index, reward, player_pov) のタプルのリスト
+            batch_size (int): 1回の学習で使用する経験の数
         """
         if not experiences:
             print("No experiences to learn from.")
-            return
+            return 0.0
             
         print(f"Agent is learning from {len(experiences)} experiences...")
         
-        observations, action_indices, rewards, povs = zip(*experiences)
+        random.shuffle(experiences)
         
-        # 観測データをモデルの入力形式に変換
-        contexts = []
-        choices_list = []
-        masks = []
+        total_loss = 0.0
+        num_batches = 0
 
-        for obs, pov in zip(observations, povs):
-            context_events, choice_strs = obs
-            context_vec = [vectorize_event(e, pov) for e in context_events]
-            choice_vecs = [vectorize_choice(c) for c in choice_strs]
+        for i in range(0, len(experiences), batch_size):
+            batch_experiences = experiences[i:i + batch_size]
             
-            padded_context = tf.keras.preprocessing.sequence.pad_sequences(
-                [context_vec], maxlen=MAX_CONTEXT_LENGTH, dtype='float32', padding='post'
-            )
-            padded_choices = tf.keras.preprocessing.sequence.pad_sequences(
-                [choice_vecs], maxlen=MAX_CHOICES, dtype='float32', padding='post'
-            )
-            mask = np.zeros((1, MAX_CHOICES), dtype='float32')
-            mask[0, :len(choice_strs)] = 1.0
+            observations, action_indices, rewards, povs = zip(*batch_experiences)
             
-            contexts.append(padded_context[0])
-            choices_list.append(padded_choices[0])
-            masks.append(mask[0])
+            contexts = []
+            choices_list = []
+            masks = []
 
-        with tf.GradientTape() as tape:
-            logits = self.model([np.array(contexts), np.array(choices_list), np.array(masks)], training=True)
-            loss = self.loss_fn(y_true=list(action_indices), y_pred=logits, sample_weight=list(rewards))
+            for obs, pov in zip(observations, povs):
+                context_events, choice_strs = obs
+                context_vec = [vectorize_event(e, pov) for e in context_events]
+                choice_vecs = [vectorize_choice(c) for c in choice_strs]
+                
+                padded_context = tf.keras.preprocessing.sequence.pad_sequences(
+                    [context_vec], maxlen=MAX_CONTEXT_LENGTH, dtype='float32', padding='post'
+                )
+                padded_choices = tf.keras.preprocessing.sequence.pad_sequences(
+                    [choice_vecs], maxlen=MAX_CHOICES, dtype='float32', padding='post'
+                )
+                mask = np.zeros((1, MAX_CHOICES), dtype='float32')
+                mask[0, :len(choice_strs)] = 1.0
+                
+                contexts.append(padded_context[0])
+                choices_list.append(padded_choices[0])
+                masks.append(mask[0])
+
+            with tf.GradientTape() as tape:
+                logits = self.model([np.array(contexts), np.array(choices_list), np.array(masks)], training=True)
+                loss = self.loss_fn(y_true=list(action_indices), y_pred=logits, sample_weight=list(rewards))
+                
+            grads = tape.gradient(loss, self.model.trainable_variables)
+            self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
             
-        grads = tape.gradient(loss, self.model.trainable_variables)
-        self.optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
+            total_loss += loss.numpy()
+            num_batches += 1
         
-        print(f"Learning finished. Loss: {loss.numpy()}")
+        avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
+        print(f"Learning finished. Average Loss: {avg_loss}")
+        return avg_loss
 

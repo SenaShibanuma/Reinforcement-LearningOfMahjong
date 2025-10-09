@@ -4,6 +4,7 @@
 強化学習の標準的なインターフェース（reset, stepなど）を持つ。
 """
 import random
+import json
 from .deck import Deck
 from mahjong.tile import TilesConverter
 from mahjong.shanten import Shanten
@@ -16,19 +17,22 @@ class MahjongEnv:
     """
     麻雀のゲーム環境をシミュレートするクラス。
     """
-    def __init__(self, agents, rules=None):
+    def __init__(self, agents, rules=None, config=None):
         """
         環境を初期化する。
         
         Args:
             agents (list): 対戦に参加するエージェントのリスト
             rules (dict, optional): カスタムルール設定. Defaults to None.
+            config (dict, optional): 外部設定ファイルからの設定. Defaults to None.
         """
         self.agents = agents
         self.num_players = len(agents)
         self.game_state = {} 
         self.shanten_calculator = Shanten()
         self.hand_calculator = HandCalculator()
+        
+        self.config = config or {}
         
         self.rules = {
             'has_aka_dora': True,
@@ -38,7 +42,9 @@ class MahjongEnv:
         if rules:
             self.rules.update(rules)
 
-        print(f"MahjongEnv: Initialized with rules: {self.rules}")
+        num_rounds = self.config.get('game', {}).get('num_rounds', 8)
+        print(f"MahjongEnv: Initialized for {num_rounds}-round game with rules: {self.rules}")
+
 
     def _is_yaochuhai(self, tile_136):
         """牌が么九牌（ヤオチュウハイ）かどうかを判定する"""
@@ -110,6 +116,30 @@ class MahjongEnv:
             if self._is_yaochuhai(tile):
                 unique_yaochuhai.add(tile // 4)
         return len(unique_yaochuhai) >= 9
+    
+    def _is_tenpai(self, player_idx):
+        """
+        プレイヤーが聴牌しているか（シャンテン数0か）を判定する。
+        HandCalculatorを使い、副露を正しく考慮する。
+        """
+        hand_136 = self.game_state['hands'][player_idx]
+        melds = self.game_state['melds'][player_idx]
+
+        if not melds:
+            shanten = self.shanten_calculator.calculate_shanten(TilesConverter.to_34_array(hand_136))
+            if shanten <= 0:
+                return True
+
+        for tile_34 in range(34):
+            if TilesConverter.to_34_array(hand_136)[tile_34] == 4:
+                continue
+            
+            test_tile_136 = tile_34 * 4
+            
+            if self._can_agari(player_idx, test_tile_136, is_tsumo=False):
+                return True
+                
+        return False
 
     def _get_my_turn_actions(self, player_idx):
         """
@@ -118,7 +148,7 @@ class MahjongEnv:
         actions = []
         hand_136 = self.game_state['hands'][player_idx]
         
-        if self.game_state['turn_count'] < self.num_players and not any(len(m) > 0 for m in self.game_state['melds']):
+        if self.game_state['turn_count'] < self.num_players and not any(player_melds for player_melds in self.game_state['melds']):
             if self._check_kyuushu_kyuuhai(hand_136):
                 actions.append("ACTION_KYUUSHU_KYUUHAI")
 
@@ -137,19 +167,16 @@ class MahjongEnv:
 
         if last_drawn_tile is not None:
              for meld in self.game_state['melds'][player_idx]:
-                 if meld.get('type') == 'pung' and meld['tiles'][0] // 4 == last_drawn_tile // 4:
+                 if meld.type == Meld.PON and meld.tiles[0] // 4 == last_drawn_tile // 4:
                      actions.append(f"ACTION_KAKAN_{last_drawn_tile}")
-
-        # 修正: is_menzenの判定が不正確だったため、鳴き情報の形式に合わせて修正
-        is_menzen = all(meld.get('opened') is False for meld in self.game_state['melds'][player_idx])
-
+        
+        is_menzen = not any(meld.opened for meld in self.game_state['melds'][player_idx])
 
         if not self.game_state['is_riichi'][player_idx] and is_menzen:
             for tile_to_discard in unique_tiles:
                 temp_hand = hand_136[:]
                 temp_hand.remove(tile_to_discard)
                 try:
-                    # 修正: リーチ判定時は副露を考慮する必要がないのでmelds引数を削除
                     shanten = self.shanten_calculator.calculate_shanten(TilesConverter.to_34_array(temp_hand))
                     if shanten == 0:
                         actions.append(f"ACTION_RIICHI_{tile_to_discard}")
@@ -171,14 +198,14 @@ class MahjongEnv:
         hand_34 = TilesConverter.to_34_array(hand_136)
         discarded_tile_34 = discarded_tile // 4
 
-        if hand_34[discarded_tile_34] >= 2:
+        if hand_34[discarded_tile_34] >= 2 and not self.game_state['is_riichi'][player_idx]:
             actions.append("ACTION_PUNG")
         
-        if hand_34[discarded_tile_34] >= 3:
+        if hand_34[discarded_tile_34] >= 3 and not self.game_state['is_riichi'][player_idx]:
             actions.append("ACTION_DAIMINKAN")
 
         discarder_idx = self.game_state['last_discarder']
-        if (discarder_idx + 1) % self.num_players == player_idx:
+        if (discarder_idx + 1) % self.num_players == player_idx and not self.game_state['is_riichi'][player_idx]:
             if discarded_tile_34 < 27:
                 tile_number = discarded_tile_34 % 9
                 if tile_number >= 2 and hand_34[discarded_tile_34 - 2] > 0 and hand_34[discarded_tile_34 - 1] > 0:
@@ -194,8 +221,6 @@ class MahjongEnv:
         """
         環境をリセットし、局の開始準備を行う。
         """
-        print("MahjongEnv: Resetting environment for a new round.")
-        
         if initial_state:
             self.game_state = initial_state
         else:
@@ -218,7 +243,8 @@ class MahjongEnv:
             'can_nagashi': [True] * self.num_players, 
             'first_turn_discards': [None] * self.num_players,
             'kan_makers': [], 
-            'pao_info': {'pao_player': -1, 'responsible_for': -1}
+            'pao_info': {'pao_player': -1, 'responsible_for': -1},
+            'agari_stats': []
         })
 
         self.current_player_idx = self.game_state['oya_player_id']
@@ -230,9 +256,6 @@ class MahjongEnv:
         self.game_state['last_drawn_tile'] = drawn_tile
         self.game_state['hands'][self.current_player_idx].append(drawn_tile)
         self.game_state['hands'][self.current_player_idx].sort()
-
-        if self._can_agari(self.game_state['oya_player_id'], drawn_tile, is_tsumo=True):
-             pass
         
         initial_event = { 
             'event_id': 'INIT', 
@@ -299,6 +322,8 @@ class MahjongEnv:
         else:
             raise ValueError(f"Invalid action in DISCARD phase: {action}")
 
+        self.game_state['last_drawn_tile'] = None
+        
         self.game_state['rivers'][self.current_player_idx].append(tile_to_discard)
         self.game_state['events'].append({'event_id': 'DISCARD', 'player': self.current_player_idx, 'tile': tile_to_discard})
         self.game_state['last_discarded_tile'] = tile_to_discard
@@ -310,7 +335,7 @@ class MahjongEnv:
                 discards = self.game_state['first_turn_discards']
                 first_tile_34 = discards[0] // 4
                 is_wind = 27 <= first_tile_34 <= 30
-                if is_wind and all(d // 4 == first_tile_34 for d in discards):
+                if is_wind and all(d is not None and d // 4 == first_tile_34 for d in discards):
                     return self._process_abortive_draw('suufuu_renda')
 
         self.game_phase = 'CALL'
@@ -345,7 +370,7 @@ class MahjongEnv:
         dragon_melds = 0
         dragon_tiles_34 = [31, 32, 33]
         for meld in melds:
-            meld_tile_34 = meld['tiles'][0] // 4
+            meld_tile_34 = meld.tiles[0] // 4
             if meld_tile_34 in dragon_tiles_34:
                 dragon_melds += 1
         
@@ -364,79 +389,85 @@ class MahjongEnv:
         is_pao_agari = (pao_player != -1 and winner_idx == responsible_for)
 
         rewards = [0] * self.num_players
+        result = None
         
         if is_pao_agari:
             is_oya = winner_idx == self.game_state['oya_player_id']
             yakuman_value = 48000 if is_oya else 32000
             print(f"  -> PAO AGARI! Value: {yakuman_value}")
-
+            total_cost = yakuman_value
+        else:
+            final_dora_indicators = self.game_state['dora_indicators'][:]
+            if self.game_state['is_riichi'][winner_idx]:
+                for i in range(1 + self.game_state['kan_count']):
+                     ura_dora_indicator = self.game_state['dead_wall'][5 + i]
+                     final_dora_indicators.append(ura_dora_indicator)
+            
+            result = self._calculate_agari_result(winner_idx, win_tile, is_tsumo, final_dora_indicators)
+            
+            if result is None or result.error: 
+                return (self.game_state['events'], []), [0]*self.num_players, True, {'reason': f'agari_error: {result.error if result else "None"}', 'game_over': True}
+            
+            total_cost = result.cost['main'] + result.cost['additional']
+            
+        if is_pao_agari:
             if is_tsumo:
-                self.game_state['scores'][pao_player] -= yakuman_value
-                rewards[pao_player] = -yakuman_value
-                total_cost = yakuman_value
-            else:
+                self.game_state['scores'][pao_player] -= total_cost
+                rewards[pao_player] = -total_cost
+            else: # Ron
                 loser_idx = self.game_state['last_discarder']
                 if loser_idx == pao_player:
-                    self.game_state['scores'][loser_idx] -= yakuman_value
-                    rewards[loser_idx] = -yakuman_value
+                    self.game_state['scores'][loser_idx] -= total_cost
+                    rewards[loser_idx] = -total_cost
                 else:
-                    payment = yakuman_value // 2
+                    payment = total_cost // 2
                     self.game_state['scores'][pao_player] -= payment
                     self.game_state['scores'][loser_idx] -= payment
                     rewards[pao_player] = -payment
                     rewards[loser_idx] = -payment
-                total_cost = yakuman_value
-        else:
-            result = None
-            total_cost = 0
-            is_renhou = (not is_tsumo and self.game_state['turn_count'] == 0 and winner_idx != self.game_state['oya_player_id'] and not any(len(m) > 0 for m in self.game_state['melds']))
-            if is_renhou:
-                total_cost = 8000
-            else:
-                final_dora_indicators = self.game_state['dora_indicators'][:]
-                if self.game_state['is_riichi'][winner_idx]:
-                    for i in range(1 + self.game_state['kan_count']):
-                         ura_dora_indicator = self.game_state['dead_wall'][5 + i]
-                         final_dora_indicators.append(ura_dora_indicator)
-                result = self._calculate_agari_result(winner_idx, win_tile, is_tsumo, final_dora_indicators)
-                if result is None or result.error: return (self.game_state['events'], []), [0]*self.num_players, True, {'reason': 'agari_error', 'game_over': True}
-                total_cost = result.cost['main'] + result.cost['additional']
-            
+        else: # Normal agari
             if is_tsumo:
-                oya_payment = result.cost['main']
-                ko_payment = result.cost['additional']
+                oya_payment = result.cost['main'] if result else 0
+                ko_payment = result.cost['additional'] if result else 0
                 for i in range(self.num_players):
                     if i == winner_idx: continue
-                    if winner_idx == self.game_state['oya_player_id']: payment = oya_payment
-                    else: payment = oya_payment if i == self.game_state['oya_player_id'] else ko_payment
+                    payment = 0
+                    if winner_idx == self.game_state['oya_player_id']:
+                        payment = oya_payment
+                    else:
+                        payment = oya_payment if i == self.game_state['oya_player_id'] else ko_payment
                     self.game_state['scores'][i] -= payment
                     rewards[i] = -payment
-            else:
+            else: # Ron
                 loser_idx = self.game_state['last_discarder']
                 self.game_state['scores'][loser_idx] -= total_cost
                 rewards[loser_idx] = -total_cost
 
-        self.game_state['is_chankan_chance'] = False
-        self.game_state['pending_kakan_player'] = -1
+        riichi_bonus = self.game_state['riichi_sticks'] * 1000
+        self.game_state['scores'][winner_idx] += total_cost + riichi_bonus
+        rewards[winner_idx] += total_cost + riichi_bonus
+        self.game_state['riichi_sticks'] = 0
 
+        if result:
+            stat = {
+                'winner': winner_idx, 'is_tsumo': is_tsumo,
+                'han': result.han, 'fu': result.fu, 'cost': total_cost,
+                'yaku': [y.name for y in result.yaku], 'dora': result.dora_count
+            }
+            self.game_state['agari_stats'].append(stat)
+        
+        self.game_state['events'].append({'event_id': 'AGARI', 'winner': winner_idx, 'hand_value': total_cost})
+        
         oya_renchan = winner_idx == self.game_state['oya_player_id']
         if oya_renchan:
             self.game_state['honba'] += 1
         else:
             self.game_state['honba'] = 0
             self.game_state['round'] += 1
-            if not oya_renchan:
-                 self.game_state['oya_player_id'] = (self.game_state['oya_player_id'] + 1) % self.num_players
-            
-        riichi_bonus = self.game_state['riichi_sticks'] * 1000
+            self.game_state['oya_player_id'] = (self.game_state['oya_player_id'] + 1) % self.num_players
         
-        self.game_state['scores'][winner_idx] += total_cost + riichi_bonus
-        rewards[winner_idx] += total_cost + riichi_bonus
-        self.game_state['riichi_sticks'] = 0
-        
-        self.game_state['events'].append({'event_id': 'AGARI', 'winner': winner_idx, 'hand_value': total_cost})
-        
-        game_over = self.game_state['round'] >= self.num_players
+        num_rounds = self.config.get('game', {}).get('num_rounds', 8)
+        game_over = self.game_state['round'] >= num_rounds
         
         if any(score < 0 for score in self.game_state['scores']):
             print("  -> A player's score is below zero. Game ends (Tobi).")
@@ -453,14 +484,15 @@ class MahjongEnv:
         hand = self.game_state['hands'][caller_idx]
         tiles_to_remove = [t for t in hand if t // 4 == discarded_tile_34][:2]
         for tile in tiles_to_remove: hand.remove(tile)
-        meld_tiles = sorted(tiles_to_remove + [discarded_tile])
-        meld_info = {'type': 'pung', 'tiles': meld_tiles, 'from': self.game_state['last_discarder'], 'opened': True}
-        self.game_state['melds'][caller_idx].append(meld_info)
-        self.game_state['events'].append({'event_id': 'MELD', 'player': caller_idx, 'meld_info': meld_info})
+        
+        meld = Meld(Meld.PON, tiles=sorted(tiles_to_remove + [discarded_tile]))
+        self.game_state['melds'][caller_idx].append(meld)
+        self.game_state['events'].append({'event_id': 'MELD', 'player': caller_idx, 'meld_info': 'pung'})
         
         self._check_for_pao(caller_idx)
 
         self.game_phase = 'DISCARD'
+        self.game_state['last_drawn_tile'] = None
         choices = self._get_my_turn_actions(caller_idx)
         return (self.game_state['events'], choices), [0]*self.num_players, False, {}
 
@@ -474,11 +506,12 @@ class MahjongEnv:
         tile2_to_remove = next((t for t in hand if t // 4 == tile2_base), None)
         if tile1_to_remove is not None: hand.remove(tile1_to_remove)
         if tile2_to_remove is not None: hand.remove(tile2_to_remove)
-        meld_tiles = sorted([tile1_to_remove, tile2_to_remove, discarded_tile])
-        meld_info = {'type': 'chii', 'tiles': meld_tiles, 'from': self.game_state['last_discarder'], 'opened': True}
-        self.game_state['melds'][caller_idx].append(meld_info)
-        self.game_state['events'].append({'event_id': 'MELD', 'player': caller_idx, 'meld_info': meld_info})
+        
+        meld = Meld(Meld.CHI, tiles=sorted([tile1_to_remove, tile2_to_remove, discarded_tile]))
+        self.game_state['melds'][caller_idx].append(meld)
+        self.game_state['events'].append({'event_id': 'MELD', 'player': caller_idx, 'meld_info': 'chii'})
         self.game_phase = 'DISCARD'
+        self.game_state['last_drawn_tile'] = None
         choices = self._get_my_turn_actions(caller_idx)
         return (self.game_state['events'], choices), [0]*self.num_players, False, {}
         
@@ -490,34 +523,41 @@ class MahjongEnv:
         
         caller_idx = self.current_player_idx
         hand = self.game_state['hands'][caller_idx]
-        tile_34 = (tile if tile is not None else self.game_state['last_discarded_tile']) // 4
         
         if kan_type == 'daiminkan':
+            discarded_tile = self.game_state['last_discarded_tile']
+            tile_34 = discarded_tile // 4
             tiles_to_remove = [t for t in hand if t // 4 == tile_34]
-            meld_tiles = tiles_to_remove + [self.game_state['last_discarded_tile']]
-        elif kan_type == 'ankan':
-            tiles_to_remove = [t for t in hand if t // 4 == tile_34]
-            meld_tiles = tiles_to_remove
-        elif kan_type == 'kakan':
-            hand.remove(tile)
-            for meld in self.game_state['melds'][caller_idx]:
-                if meld.get('type') == 'pung' and meld['tiles'][0] // 4 == tile_34:
-                    meld['type'] = 'kakan'
-                    meld['tiles'].append(tile)
-                    break
-        
-        if kan_type in ['daiminkan', 'ankan']:
+            meld_tiles = tiles_to_remove + [discarded_tile]
             for t in tiles_to_remove: hand.remove(t)
-            meld_info = {'type': kan_type, 'tiles': sorted(meld_tiles), 
-                         'from': self.game_state['last_discarder'] if kan_type == 'daiminkan' else caller_idx,
-                         'opened': kan_type != 'ankan'}
-            self.game_state['melds'][caller_idx].append(meld_info)
-        
-        if kan_type == 'daiminkan':
+            meld = Meld(Meld.KAN, tiles=sorted(meld_tiles), opened=True)
+            self.game_state['melds'][caller_idx].append(meld)
             self._check_for_pao(caller_idx)
 
+        elif kan_type == 'ankan':
+            tile_34 = tile // 4
+            tiles_to_remove = [t for t in hand if t // 4 == tile_34]
+            for t in tiles_to_remove: hand.remove(t)
+            meld = Meld(Meld.KAN, tiles=sorted(tiles_to_remove), opened=False)
+            self.game_state['melds'][caller_idx].append(meld)
+
+        elif kan_type == 'kakan':
+            tile_34 = tile // 4
+            hand.remove(tile)
+            
+            original_pon = None
+            for meld_obj in self.game_state['melds'][caller_idx]:
+                if meld_obj.type == Meld.PON and meld_obj.tiles[0] // 4 == tile_34:
+                    original_pon = meld_obj
+                    break
+            
+            if original_pon:
+                self.game_state['melds'][caller_idx].remove(original_pon)
+                new_kan_tiles = original_pon.tiles + [tile]
+                new_meld = Meld(Meld.KAN, tiles=sorted(new_kan_tiles), opened=True)
+                self.game_state['melds'][caller_idx].append(new_meld)
+
         self.game_state['kan_makers'].append(caller_idx)
-        
         if len(self.game_state['kan_makers']) == 4:
             if len(set(self.game_state['kan_makers'])) > 1:
                 return self._process_abortive_draw('suukansanra')
@@ -527,7 +567,6 @@ class MahjongEnv:
         hand.append(rinshan_tile)
         hand.sort()
         self.game_state['last_drawn_tile'] = rinshan_tile
-
         self.game_state['dead_wall'].append(self.game_state['wall'].pop())
 
         self.game_state['kan_count'] += 1
@@ -535,7 +574,6 @@ class MahjongEnv:
         self.game_state['dora_indicators'].append(new_dora_indicator)
 
         self.game_state['events'].append({'event_id': 'MELD', 'type': 'kan', 'player': caller_idx})
-        
         self.game_phase = 'DISCARD'
         choices = self._get_my_turn_actions(caller_idx)
         return (self.game_state['events'], choices), [0]*self.num_players, False, {}
@@ -573,23 +611,17 @@ class MahjongEnv:
             if self.game_state['oya_player_id'] not in nagashi_winners:
                  self.game_state['oya_player_id'] = (self.game_state['oya_player_id'] + 1) % self.num_players
                  self.game_state['round'] += 1
-
-            game_over = self.game_state['round'] >= self.num_players
+            
+            num_rounds = self.config.get('game', {}).get('num_rounds', 8)
+            game_over = self.game_state['round'] >= num_rounds
             return (self.game_state['events'], []), rewards, True, {'reason': 'nagashi_mangan', 'game_over': game_over}
 
         tenpai_players = []
         for i in range(self.num_players):
-            # 修正: 手牌と副露を結合してシャンテン数を計算
-            hand_136 = self.game_state['hands'][i][:]
-            for meld in self.game_state['melds'][i]:
-                hand_136.extend(meld['tiles'])
-            shanten = self.shanten_calculator.calculate_shanten(TilesConverter.to_34_array(hand_136))
-            if shanten == 0:
+            if self._is_tenpai(i):
                 tenpai_players.append(i)
         
-        rewards = [0] * self.num_players
         num_tenpai = len(tenpai_players)
-        
         if 0 < num_tenpai < self.num_players:
             payment = 3000 // (self.num_players - num_tenpai)
             receipt = 3000 // num_tenpai
@@ -608,7 +640,8 @@ class MahjongEnv:
             self.game_state['oya_player_id'] = (self.game_state['oya_player_id'] + 1) % self.num_players
             self.game_state['round'] += 1
 
-        game_over = self.game_state['round'] >= self.num_players
+        num_rounds = self.config.get('game', {}).get('num_rounds', 8)
+        game_over = self.game_state['round'] >= num_rounds
         
         if any(score < 0 for score in self.game_state['scores']):
             print("  -> A player's score is below zero. Game ends (Tobi).")
@@ -621,7 +654,8 @@ class MahjongEnv:
         print(f"  -> Abortive draw due to {reason}.")
         self.game_state['honba'] += 1
         
-        game_over = self.game_state['round'] >= self.num_players
+        num_rounds = self.config.get('game', {}).get('num_rounds', 8)
+        game_over = self.game_state['round'] >= num_rounds
         return (self.game_state['events'], []), [0]*self.num_players, True, {'reason': reason, 'game_over': game_over}
 
     def _process_pass(self):
@@ -644,8 +678,9 @@ class MahjongEnv:
             self.game_phase = 'DISCARD'
             self.current_player_idx = (self.game_state['last_discarder'] + 1) % self.num_players
             
-            self.game_state['is_ippatsu_chance'][self.current_player_idx] = False
-
+            if self.game_state['is_riichi'][self.current_player_idx]:
+                self.game_state['is_ippatsu_chance'] = [False] * self.num_players
+            
             if not self.game_state['wall']:
                 return self._process_ryuukyoku()
             
