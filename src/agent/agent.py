@@ -6,7 +6,6 @@ AIエージェントを定義するファイル。
 import os
 import numpy as np
 import tensorflow as tf
-import random
 from src.agent.model import build_masked_transformer
 from src.utils.vectorizer import vectorize_event, vectorize_choice
 from src.constants import MAX_CONTEXT_LENGTH, MAX_CHOICES
@@ -14,47 +13,45 @@ from src.constants import MAX_CONTEXT_LENGTH, MAX_CHOICES
 class MahjongAgent:
     def __init__(self, model_path=None):
         """
-        エージェントを初期化し、学習済みモデルを読み込む。
-        モデルパスが存在すればモデルをロードし、なければ新規作成する。
+        エージェントを初期化し、モデルの骨格を構築する。
+        モデルパスが指定されていれば、学習済みの重みを読み込む。
         """
         print("Initializing Mahjong Agent...")
+        # まず、モデルの骨格（アーキテクチャ）を常にコードから構築する
+        self.model = build_masked_transformer()
+
         if model_path and os.path.exists(model_path):
+            print(f"Found model file at: {model_path}")
             try:
-                print(f"Loading model from {model_path}...")
-                self.model = tf.keras.models.load_model(model_path)
+                # モデル全体ではなく、学習済みの「重み」のみを読み込む
+                self.model.load_weights(model_path)
+                print("Successfully loaded model weights.")
             except Exception as e:
-                print(f"Error loading model: {e}. Building a new model instead.")
-                self.model = build_masked_transformer()
+                # 読み込み失敗のメッセージをより明確にする
+                print(f"Warning: Could not load weights from '{model_path}'.")
+                print(f"Reason: {e}")
+                print("The agent will start with a new, untrained model.")
         else:
-            print("Warning: No model path provided. Building a new model.")
-            self.model = build_masked_transformer()
+            if model_path:
+                print(f"Warning: Model file not found at '{model_path}'.")
+            else:
+                print("Warning: No model path provided.")
+            print("The agent will start with a new, untrained model.")
 
         # モデルの学習用設定をコンパイル
         self.optimizer = tf.keras.optimizers.Adam(learning_rate=0.001)
         self.loss_fn = tf.keras.losses.SparseCategoricalCrossentropy(from_logits=True)
-
+    
     def choose_action(self, context_events, choice_strs, player_pov, is_training=False):
         """
         現在の観測情報(context, choices)から、実行すべき行動を選択する。
-        
-        Args:
-            context_events (list): イベント辞書のリスト
-            choice_strs (list): 選択肢文字列のリスト
-            player_pov (int): 自身のプレイヤーID (0-3)
-            is_training (bool): 学習モードか否か。Trueの場合、探索的な行動を取る。
-
-        Returns:
-            str: 選択された行動の文字列 (例: "DISCARD_24")
-            dict: 各行動の選択確率
         """
         if not choice_strs:
             return None, {}
 
-        # 1. Vectorize inputs
         context_vec = [vectorize_event(e, player_pov) for e in context_events]
         choice_vecs = [vectorize_choice(c) for c in choice_strs]
 
-        # 2. Pad and create mask
         padded_context = tf.keras.preprocessing.sequence.pad_sequences(
             [context_vec], maxlen=MAX_CONTEXT_LENGTH, dtype='float32', padding='post'
         )
@@ -64,27 +61,22 @@ class MahjongAgent:
         mask = np.zeros((1, MAX_CHOICES), dtype='float32')
         mask[0, :len(choice_strs)] = 1.0
 
-        # 3. Predict
         model_inputs = [padded_context, padded_choices, mask]
         
-        # パフォーマンス向上のため、predict()ではなくモデルを直接呼び出す
         logits = self.model(model_inputs, training=False)
         
-        # 4. Convert logits to probabilities
-        # 非常に大きな/小さなlogit値をクリップして、softmaxの計算を安定させる
-        valid_logits = tf.clip_by_value(logits[0][:len(choice_strs)], -10.0, 10.0)
-        probabilities = tf.nn.softmax(valid_logits).numpy()
+        masked_logits = logits[0, :len(choice_strs)]
         
-        # 確率の合計が1になるように再正規化（浮動小数点誤差対策）
+        masked_logits = tf.clip_by_value(masked_logits, -1e9, 1e9)
+        
+        probabilities = tf.nn.softmax(masked_logits).numpy()
+        
         probabilities /= np.sum(probabilities)
 
-        # 5. Choose action
         if is_training:
-            # 学習中は、確率分布に従ってランダムに行動を選択（探索）
-            selected_action_index = np.random.choice(len(choice_strs), p=probabilities)
-            selected_action = choice_strs[selected_action_index]
+            selected_idx = np.random.choice(len(choice_strs), p=probabilities)
+            selected_action = choice_strs[selected_idx]
         else:
-            # 本番（評価）では、最も確率の高い行動を選択（活用）
             best_action_index = np.argmax(probabilities)
             selected_action = choice_strs[best_action_index]
         
@@ -94,11 +86,7 @@ class MahjongAgent:
 
     def learn(self, experiences, batch_size=64):
         """
-        与えられた経験データからバッチ単位でモデルを学習する。
-        
-        Args:
-            experiences (list): (observation, action_index, reward, player_pov) のタプルのリスト
-            batch_size (int): 1回の学習で使用する経験の数
+        与えられた経験データからバッチ学習を行う。
         """
         if not experiences:
             print("No experiences to learn from.")
@@ -106,15 +94,14 @@ class MahjongAgent:
             
         print(f"Agent is learning from {len(experiences)} experiences...")
         
-        random.shuffle(experiences)
-        
         total_loss = 0.0
         num_batches = 0
+        
+        np.random.shuffle(experiences)
 
         for i in range(0, len(experiences), batch_size):
-            batch_experiences = experiences[i:i + batch_size]
-            
-            observations, action_indices, rewards, povs = zip(*batch_experiences)
+            batch = experiences[i:i+batch_size]
+            observations, action_indices, rewards, povs = zip(*batch)
             
             contexts = []
             choices_list = []
@@ -149,6 +136,6 @@ class MahjongAgent:
             num_batches += 1
         
         avg_loss = total_loss / num_batches if num_batches > 0 else 0.0
-        print(f"Learning finished. Average Loss: {avg_loss}")
+        print(f"Learning finished. Average Loss: {avg_loss:.4f}")
         return avg_loss
 
