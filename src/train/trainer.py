@@ -10,6 +10,9 @@ import numpy as np
 import tensorflow as tf
 from src.agent.agent import MahjongAgent
 from src.env.mahjong_env import MahjongEnv
+from mahjong.shanten import Shanten
+from mahjong.tile import TilesConverter
+from mahjong.meld import Meld
 
 class ExperienceBuffer:
     """経験（状態、行動、報酬など）を一時的に保存するバッファ。"""
@@ -35,20 +38,18 @@ class Trainer:
         model_name = model_config.get('model_name', 'model')
         model_dir = model_config.get('model_save_dir', 'models')
 
-        # 1. まず最新バージョンのモデルを探す
-        print(f"Searching for latest versioned model with base name '{model_name}' in '{model_dir}'...")
-        model_path, latest_version = self._find_latest_model(model_dir, model_name)
+        # --- START: MODIFICATION ---
+        # 起動時にロードするモデルパスのみを決定する
+        print(f"Searching for latest model to load with base name '{model_name}' in '{model_dir}'...")
+        model_path, _ = self._find_latest_model(model_dir, model_name)
         
-        # 2. 見つからなければ、バージョン番号のないベースモデルを探す
         if not model_path:
             base_model_path = os.path.join(model_dir, f"{model_name}.keras")
             print(f"No versioned model found. Checking for base model at '{base_model_path}'...")
             if os.path.exists(base_model_path):
                 print(f"Found base model: {base_model_path}")
                 model_path = base_model_path
-                latest_version = 0 # 次の保存はver1から
-
-        self.latest_model_version = latest_version
+        # --- END: MODIFICATION ---
 
         if model_path:
             print(f"Loading model from: {model_path}")
@@ -61,9 +62,39 @@ class Trainer:
         
         self.buffers = [ExperienceBuffer() for _ in range(4)]
 
+        self.shanten_calculator = Shanten()
+
         # TensorBoardのセットアップ
         self.log_dir = self.config.get('logging', {}).get('tensorboard_log_dir', 'logs/tensorboard')
         self.summary_writer = tf.summary.create_file_writer(self.log_dir)
+
+    def _calculate_shanten(self, hand_136, melds_136):
+        """与えられた手牌と副露からシャンテン数を計算するヘルパー関数"""
+        try:
+            hand_34 = TilesConverter.to_34_array(hand_136)
+            
+            pon_sets_34 = []
+            chi_sets_34 = []
+
+            for meld in melds_136:
+                meld_type = meld.type
+                meld_tiles_34 = [t // 4 for t in meld.tiles]
+                
+                if meld_type == Meld.PON:
+                    pon_sets_34.append(meld_tiles_34)
+                elif meld_type == Meld.CHI:
+                    chi_sets_34.append(meld_tiles_34)
+                # KAN (ankan, daiminkan, kakan) はポンとして扱ってもシャンテン数計算は可能
+                elif meld_type == Meld.KAN:
+                    pon_sets_34.append(meld_tiles_34[:3])
+
+            return self.shanten_calculator.calculate_shanten(
+                hand_34,
+                chi_sets_34=chi_sets_34,
+                pon_sets_34=pon_sets_34
+            )
+        except Exception:
+            return 8
 
     def _find_latest_model(self, model_dir, model_name):
         """指定されたモデル名に一致する最新バージョンのモデルファイルを見つける。"""
@@ -82,7 +113,11 @@ class Trainer:
                     latest_version = version
                     latest_model_path = os.path.join(model_dir, filename)
         
-        return latest_model_path, latest_version if latest_version != -1 else 0
+        # バージョン付きモデルが見つからなかった場合、バージョンを0として扱う
+        if latest_version == -1:
+             latest_version = 0
+
+        return latest_model_path, latest_version
 
     def self_play(self):
         """1半荘の自己対戦を実行し、経験を収集する。"""
@@ -109,8 +144,18 @@ class Trainer:
                     _, rewards, round_done, info = self.env._process_abortive_draw("no_choices")
                     break
 
+                # 行動前のシャンテン数を計算
+                hand_before = self.env.game_state['hands'][current_player_id]
+                melds_before = self.env.game_state['melds'][current_player_id]
+                shanten_before = self._calculate_shanten(hand_before, melds_before)
+
                 current_agent = self.agents[current_player_id]
                 selected_action, _ = current_agent.choose_action(context, choices, current_player_id, is_training=True)
+
+                turn = self.env.game_state.get('turn_count', 0)
+                if self.env.game_phase == 'DISCARD':
+                    print(f" -> Turn {turn}: Player {current_player_id} draws and considers...")
+                print(f"    Action: Player {current_player_id} chooses {selected_action}")
                 
                 if selected_action not in choices:
                     print(f"Error: Agent selected an invalid action '{selected_action}'. Defaulting to first choice.")
@@ -120,16 +165,35 @@ class Trainer:
 
                 next_observation, rewards, round_done, info = self.env.step(selected_action)
                 
-                experience = (current_observation, action_index, 0, current_player_id) 
+                # 行動後のシャンテン数を計算
+                hand_after = self.env.game_state['hands'][current_player_id]
+                melds_after = self.env.game_state['melds'][current_player_id]
+                shanten_after = self._calculate_shanten(hand_after, melds_after)
+
+                # 中間報酬を計算
+                intermediate_reward = 0.0
+                if shanten_after < shanten_before:
+                    intermediate_reward += 0.1
+                elif shanten_after > shanten_before:
+                    intermediate_reward -= 0.1
+
+                if shanten_after == 0 and shanten_before > 0:
+                    intermediate_reward += 0.5
+
+                # アガリに対する追加ボーナス
+                if selected_action in ["ACTION_TSUMO", "ACTION_RON"]:
+                    intermediate_reward += 1.0
+
+                experience = (current_observation, action_index, intermediate_reward, current_player_id) 
                 round_experiences[current_player_id].append(experience)
 
                 current_observation = next_observation
 
             for player_id in range(4):
                 final_reward = rewards[player_id]
-                for obs, act_idx, _, pov in round_experiences[player_id]:
-                    normalized_reward = final_reward / 1000.0
-                    self.buffers[player_id].add((obs, act_idx, normalized_reward, pov))
+                for obs, act_idx, intermediate_reward, pov in round_experiences[player_id]:
+                    total_reward = intermediate_reward + (final_reward / 1000.0)
+                    self.buffers[player_id].add((obs, act_idx, total_reward, pov))
 
             game_state = self.env.game_state
             print(f"======== Round Ended. Reason: {info.get('reason')} ========")
@@ -152,7 +216,6 @@ class Trainer:
         print(f"Final Scores: {game_state['scores']}")
         return game_state
 
-
     def train(self):
         """設定されたゲーム数だけ自己対戦と学習のサイクルを回す。"""
         num_games = self.config.get('training', {}).get('num_games', 1)
@@ -163,38 +226,76 @@ class Trainer:
             for buffer in self.buffers:
                 buffer.clear()
             
+            # --- 自己対戦 ---
             final_game_state = self.self_play()
             
+            # --- 順位点計算 ---
+            final_scores = final_game_state['scores']
+            ranking_rewards = np.zeros(4)
+            is_all_draw_game = len(final_game_state.get('agari_stats', [])) == 0
+            
+            print("\n--- Final Ranks & Ranking Rewards ---")
+            
+            if is_all_draw_game:
+                print("No agari in this game. Ranking points will be scaled down.")
+
+            if len(set(final_scores)) == 1:
+                print("All players have the same score. No ranking points will be awarded.")
+            else:
+                player_ranks = sorted(range(len(final_scores)), key=lambda k: final_scores[k], reverse=True)
+                ranking_points = self.config.get('rewards', {}).get('ranking_points', [15, 5, -5, -15])
+                
+                if is_all_draw_game:
+                    penalty_factor = self.config.get('rewards', {}).get('all_draw_ranking_penalty_factor', 0.5)
+                    ranking_points = [p * penalty_factor for p in ranking_points]
+                
+                for rank, player_idx in enumerate(player_ranks):
+                    ranking_rewards[player_idx] = ranking_points[rank]
+                    print(f"Rank {rank+1}: Player {player_idx} (Score: {final_scores[player_idx]}) -> Reward: {ranking_rewards[player_idx]}")
+            
+            print("------------------------------------")
+
+            # --- 経験データに順位点を加算 ---
+            all_experiences = []
+            for player_id in range(4):
+                player_buffer = self.buffers[player_id].get_all()
+                for obs, act_idx, reward, pov in player_buffer:
+                    total_reward = reward + (ranking_rewards[player_id] / 10.0)
+                    all_experiences.append((obs, act_idx, total_reward, pov))
+
+            # --- モデル更新 ---
             print("\n-------- Updating Models --------")
             main_agent = self.agents[0]
-            all_experiences = []
-            for buffer in self.buffers:
-                all_experiences.extend(buffer.get_all())
             
             avg_loss = 0.0
             if all_experiences:
                 batch_size = self.config.get('training', {}).get('batch_size', 64)
                 avg_loss = main_agent.learn(all_experiences, batch_size=batch_size)
             
-            # TensorBoardに記録
-            with self.summary_writer.as_default():
-                tf.summary.scalar('loss', avg_loss, step=self.latest_model_version + i)
-                
-                scores = np.array(final_game_state['scores'])
-                score_std_dev = np.std(scores)
-                tf.summary.scalar('score_standard_deviation', score_std_dev, step=self.latest_model_version + i)
-
+            # --- モデルの同期と保存 ---
             print("Synchronizing weights to all agents...")
             weights = main_agent.model.get_weights()
             for agent in self.agents[1:]:
                 agent.model.set_weights(weights)
 
-            self.save_log(final_game_state, i)
-            self.save_model(i)
-            self.save_stats(final_game_state, i)
+            # --- START: MODIFICATION ---
+            # モデルを保存し、保存された場合はそのバージョン番号を取得
+            saved_version = self.save_model(i) # ループカウンタ `i` を渡す
+            
+            # モデルが保存された場合のみ、ログと統計も同じバージョン番号で保存
+            if saved_version is not None:
+                self.save_log(final_game_state, saved_version)
+                self.save_stats(final_game_state, saved_version)
+                
+                # TensorBoardへの記録も保存された時だけ行う
+                with self.summary_writer.as_default():
+                    tf.summary.scalar('loss', avg_loss, step=saved_version)
+                    scores = np.array(final_game_state['scores'])
+                    score_std_dev = np.std(scores)
+                    tf.summary.scalar('score_standard_deviation', score_std_dev, step=saved_version)
+            # --- END: MODIFICATION ---
 
-    def save_log(self, game_state, game_num):
-        """現在のゲームのイベント履歴をJSONファイルとして保存する。"""
+    def save_log(self, game_state, game_version):
         log_config = self.config.get('logging', {})
         if not log_config.get('save_game_logs', False):
             return
@@ -203,46 +304,49 @@ class Trainer:
             log_dir = log_config.get('game_log_dir', 'logs/games')
             os.makedirs(log_dir, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            filename = os.path.join(log_dir, f"game_{self.latest_model_version + game_num}_{timestamp}.json")
+            filename = os.path.join(log_dir, f"game_ver{game_version}_{timestamp}.json")
             
-            loggable_events = []
-            for event in game_state.get('events', []):
-                loggable_event = {}
-                for key, value in event.items():
-                    if isinstance(value, (dict, list, str, int, float, bool, type(None), np.number)):
-                        loggable_event[key] = value
-                loggable_events.append(loggable_event)
-
             with open(filename, 'w', encoding='utf-8') as f:
-                json.dump(loggable_events, f, indent=2, ensure_ascii=False, default=lambda o: '<not serializable>')
+                json.dump(game_state, f, indent=2, ensure_ascii=False, default=lambda o: '<not serializable>')
             
             print(f"======== Game log saved to {filename} ========")
 
         except Exception as e:
             print(f"Error saving game log file: {e}")
             
-    def save_model(self, game_num):
-        """現在のモデルを保存する。"""
+    # --- START: MODIFICATION ---
+    def save_model(self, loop_counter):
+        """
+        現在のモデルを保存する。保存した場合、新しいバージョン番号を返す。
+        保存しなかった場合、Noneを返す。
+        """
         model_config = self.config.get('model', {})
         if not model_config.get('save_models', False):
-            return
-            
-        if game_num % model_config.get('save_interval_games', 1) == 0:
+            return None
+        
+        # configで指定された間隔で保存するかどうかをチェック
+        if loop_counter % model_config.get('save_interval_games', 1) == 0:
             try:
                 model_dir = model_config.get('model_save_dir', 'models')
                 model_name = model_config.get('model_name', 'model')
                 os.makedirs(model_dir, exist_ok=True)
                 
-                new_version = self.latest_model_version + game_num
+                # 保存する直前に、ディレクトリ内の最新バージョンを動的に取得
+                _, latest_version = self._find_latest_model(model_dir, model_name)
+                new_version = latest_version + 1
                 
                 model_path = os.path.join(model_dir, f"{model_name}_ver{new_version}.keras")
                 self.agents[0].model.save(model_path)
                 print(f"======== Model saved to {model_path} ========")
+                return new_version # 保存したバージョン番号を返す
             except Exception as e:
                 print(f"Error saving model: {e}")
+                return None
+        
+        return None # 保存間隔外なのでNoneを返す
+    # --- END: MODIFICATION ---
 
-    def save_stats(self, game_state, game_num):
-        """アガリ統計情報をファイルに追記する。"""
+    def save_stats(self, game_state, game_version):
         log_config = self.config.get('logging', {})
         if not log_config.get('save_stats', False):
             return
@@ -253,7 +357,7 @@ class Trainer:
             os.makedirs(os.path.dirname(stats_file), exist_ok=True)
             with open(stats_file, 'a', encoding='utf-8') as f:
                 for stat in game_state.get('agari_stats', []):
-                    stat_with_game_num = {'game': self.latest_model_version + game_num, **stat}
+                    stat_with_game_num = {'game': game_version, **stat}
                     f.write(json.dumps(stat_with_game_num, ensure_ascii=False) + '\n')
             
             if game_state.get('agari_stats'):

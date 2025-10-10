@@ -127,34 +127,34 @@ class MahjongEnv:
 
     def _is_tenpai(self, player_idx):
         """
-        プレイヤーが聴牌しているか（シャンテン数0か）を判定する。
-        HandCalculatorを使い、副露を正しく考慮する。
+        プレイヤーが聴牌しているか判定する。
+        「役なし」を考慮し、実際にアガれる待ちがある場合のみTrueを返す。
         """
         hand_136 = self.game_state['hands'][player_idx]
-        melds = self.game_state['melds'][player_idx]
+        hand_34 = TilesConverter.to_34_array(hand_136)
 
-        # 門前の場合、高速なシャンテン数計算機を使用
-        if not melds:
-            try:
-                shanten = self.shanten_calculator.calculate_shanten(
-                    TilesConverter.to_34_array(hand_136))
-                return shanten <= 0
-            except:
-                # 計算に失敗した場合は、より安全な方法にフォールバック
-                pass
+        # 聴牌の形（シャンテン数0）でなければ、アガれる可能性はない
+        try:
+            shanten = self.shanten_calculator.calculate_shanten(hand_34)
+            if shanten > 0:
+                return False
+        except:
+            return False # 計算エラー時は聴牌ではないとする
 
-        # 副露している場合やシャンテン計算機がエラーを返した場合は、
-        # 全ての牌を試してアガリ形になるかを確認する
+        # 34種類の全ての牌について、アガリ牌になるか試す
         for tile_34 in range(34):
             # 既に4枚持っている牌はアガリ牌になりえない
-            if TilesConverter.to_34_array(hand_136)[tile_34] == 4:
+            if hand_34[tile_34] == 4:
                 continue
 
             test_tile_136 = tile_34 * 4
-
+            
+            # _can_agariは役の有無までチェックしてくれる
             if self._can_agari(player_idx, test_tile_136, is_tsumo=False):
+                # 1つでもアガれる待ちがあれば、それは真の聴牌
                 return True
 
+        # どのアガリ牌でも役が成立しない場合は、形式聴牌ではあるがアガれない
         return False
 
     def _get_my_turn_actions(self, player_idx):
@@ -193,19 +193,21 @@ class MahjongEnv:
                             for meld in self.game_state['melds'][player_idx])
 
         if not self.game_state['is_riichi'][player_idx] and is_menzen:
-            # リーチ可能かどうかの判定は聴牌判定に集約
             if self._is_tenpai(player_idx):
                 for tile_to_discard in unique_tiles:
                     # どの牌を切っても聴牌を維持できるかチェック
                     temp_hand = hand_136[:]
                     temp_hand.remove(tile_to_discard)
-                    try:
-                        shanten = self.shanten_calculator.calculate_shanten(
-                            TilesConverter.to_34_array(temp_hand))
-                        if shanten == 0:
-                            actions.append(f"ACTION_RIICHI_{tile_to_discard}")
-                    except:
-                        continue
+                    
+                    # リーチ後の手牌を一時的に保存し、新しい状態で聴牌判定
+                    original_hand = self.game_state['hands'][player_idx]
+                    self.game_state['hands'][player_idx] = temp_hand
+                    
+                    if self._is_tenpai(player_idx):
+                        actions.append(f"ACTION_RIICHI_{tile_to_discard}")
+
+                    # 手牌を元に戻す
+                    self.game_state['hands'][player_idx] = original_hand
 
         return list(dict.fromkeys(actions))
 
@@ -526,6 +528,12 @@ class MahjongEnv:
         self.game_state['riichi_sticks'] = 0
 
         if result:
+            # --- START: MODIFICATION ---
+            dora_count = 0
+            for yaku in result.yaku:
+                if 'Dora' in yaku.name:
+                    dora_count += (yaku.han_closed or yaku.han_opened or 0)
+
             stat = {
                 'winner': winner_idx,
                 'is_tsumo': is_tsumo,
@@ -533,8 +541,9 @@ class MahjongEnv:
                 'fu': result.fu,
                 'cost': total_cost,
                 'yaku': [y.name for y in result.yaku],
-                'dora': result.dora_count
+                'dora': dora_count
             }
+            # --- END: MODIFICATION ---
             self.game_state['agari_stats'].append(stat)
 
         self.game_state['events'].append({

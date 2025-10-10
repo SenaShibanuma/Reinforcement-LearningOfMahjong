@@ -1,0 +1,312 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mahjong Game Viewer</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { font-family: 'Inter', sans-serif; }
+        .tile {
+            width: 2.5rem;
+            height: 3.5rem;
+            border: 1px solid #718096;
+            background-color: #F7FAFC;
+            border-radius: 4px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 1.5rem;
+            margin: 2px;
+            box-shadow: 1px 1px 3px rgba(0,0,0,0.2);
+            user-select: none;
+            cursor: default;
+        }
+        .tile.red { color: #E53E3E; }
+        .tile-small {
+            width: 1.8rem;
+            height: 2.5rem;
+            font-size: 1.1rem;
+        }
+        .river-tile {
+            transform: rotate(0deg);
+        }
+        .player-area {
+            min-height: 120px;
+        }
+        .player-0 { transform: rotate(0deg); }
+        .player-1 { transform: rotate(90deg); }
+        .player-2 { transform: rotate(180deg); }
+        .player-3 { transform: rotate(-90deg); }
+    </style>
+</head>
+<body class="bg-gray-100 text-gray-800">
+
+    <div class="container mx-auto p-4">
+        <header class="text-center mb-4">
+            <h1 class="text-3xl font-bold text-gray-700">Mahjong Game Viewer</h1>
+            <p class="text-gray-500">Load a game log JSON file to start replay.</p>
+        </header>
+
+        <div class="bg-white p-4 rounded-lg shadow-md mb-4">
+            <input type="file" id="logFileInput" accept=".json" class="block w-full text-sm text-gray-500 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-blue-50 file:text-blue-700 hover:file:bg-blue-100"/>
+        </div>
+
+        <main id="viewer" class="hidden">
+            <div class="grid grid-cols-1 md:grid-cols-3 gap-4">
+                <!-- Game Board -->
+                <div class="md:col-span-2 bg-green-800 p-6 rounded-lg shadow-xl relative aspect-square flex items-center justify-center">
+                    <div class="bg-green-700 w-3/4 h-3/4 rounded-md shadow-inner flex flex-col items-center justify-center text-white p-4">
+                        <h2 id="roundInfo" class="text-2xl font-semibold">East 1</h2>
+                        <div class="flex items-center space-x-4 mt-2">
+                           <div>Riichi Sticks: <span id="riichiSticks" class="font-mono bg-white text-black py-1 px-2 rounded">0</span></div>
+                           <div>Honba: <span id="honba" class="font-mono bg-white text-black py-1 px-2 rounded">0</span></div>
+                        </div>
+                         <div class="mt-4">
+                            <span>Dora Indicator:</span>
+                            <div id="doraIndicator" class="tile tile-small inline-flex"></div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Player Info & Controls -->
+                <div class="space-y-4">
+                    <div id="player-info-container" class="bg-white p-4 rounded-lg shadow-md space-y-3">
+                        <!-- Player info will be injected here -->
+                    </div>
+                    
+                    <div class="bg-white p-4 rounded-lg shadow-md">
+                        <h3 class="font-bold mb-2">Replay Controls</h3>
+                        <div class="flex items-center space-x-2 mb-2">
+                            <button id="prevBtn" class="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300">Prev</button>
+                            <button id="playPauseBtn" class="px-4 py-2 bg-blue-500 text-white rounded-md hover:bg-blue-600">Play</button>
+                            <button id="nextBtn" class="px-4 py-2 bg-gray-200 rounded-md hover:bg-gray-300">Next</button>
+                        </div>
+                        <div class="flex items-center space-x-2">
+                           <span id="eventCounter" class="text-sm font-mono w-24">0 / 0</span>
+                           <input type="range" id="eventSlider" class="w-full" min="0" max="0" value="0">
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Rivers -->
+             <div class="mt-6 bg-white p-4 rounded-lg shadow-md">
+                 <h3 class="font-bold text-center mb-2">Rivers (捨て牌)</h3>
+                 <div id="rivers-container" class="space-y-4">
+                    <!-- Rivers will be injected here -->
+                 </div>
+             </div>
+        </main>
+    </div>
+
+    <script>
+        const TILE_MAP = [
+            '🀇', '🀈', '🀉', '🀊', '🀋', '🀌', '🀍', '🀎', '🀏', // Manzu 1-9
+            '🀙', '🀚', '🀛', '🀜', '🀝', '🀞', '🀟', '🀠', '🀡', // Pinzu 1-9
+            '🀐', '🀑', '🀒', '🀓', '🀔', '🀕', '🀖', '🀗', '🀘', // Souzu 1-9
+            '🀀', '🀁', '🀂', '🀃', // Winds (E, S, W, N)
+            '🀆', '🀅', '🀄'  // Dragons (Haku, Hatsu, Chun)
+        ];
+        
+        let gameEvents = [];
+        let currentEventIndex = 0;
+        let gameStateSnapshots = [];
+        let isPlaying = false;
+        let playInterval;
+
+        const logFileInput = document.getElementById('logFileInput');
+        const viewer = document.getElementById('viewer');
+        const prevBtn = document.getElementById('prevBtn');
+        const playPauseBtn = document.getElementById('playPauseBtn');
+        const nextBtn = document.getElementById('nextBtn');
+        const eventCounter = document.getElementById('eventCounter');
+        const eventSlider = document.getElementById('eventSlider');
+
+        logFileInput.addEventListener('change', handleFileSelect);
+        prevBtn.addEventListener('click', () => updateEventIndex(currentEventIndex - 1));
+        nextBtn.addEventListener('click', () => updateEventIndex(currentEventIndex + 1));
+        playPauseBtn.addEventListener('click', togglePlay);
+        eventSlider.addEventListener('input', () => updateEventIndex(parseInt(eventSlider.value)));
+
+        function tileIdToUnicode(id, isAkaDora = false) {
+            if (id === null || id === undefined) return '';
+            const type = Math.floor(id / 4);
+            // Akadora representation
+            if (isAkaDora && (id === 16 || id === 52 || id === 88)) {
+                return TILE_MAP[type];
+            }
+            return TILE_MAP[type];
+        }
+
+        function createTileElement(id, isAkaDora = false, small = false) {
+            const el = document.createElement('div');
+            el.className = 'tile' + (small ? ' tile-small' : '');
+            if (isAkaDora && (id === 16 || id === 52 || id === 88)) {
+                el.classList.add('red');
+            }
+            el.textContent = tileIdToUnicode(id, isAkaDora);
+            return el;
+        }
+
+        function handleFileSelect(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                try {
+                    gameEvents = JSON.parse(e.target.result);
+                    if (!Array.isArray(gameEvents)) throw new Error("Log is not an array");
+                    processGameEvents();
+                    viewer.classList.remove('hidden');
+                } catch (error) {
+                    alert('Error parsing JSON file: ' + error.message);
+                }
+            };
+            reader.readAsText(file);
+        }
+
+        function processGameEvents() {
+            gameStateSnapshots = [];
+            let currentState = {
+                round: 0, honba: 0, riichi_sticks: 0,
+                dora_indicators: [],
+                scores: [25000, 25000, 25000, 25000],
+                hands: [[], [], [], []],
+                melds: [[], [], [], []],
+                rivers: [[], [], [], []],
+                oya: 0,
+                last_event_description: "Game Start"
+            };
+
+            for (const event of gameEvents) {
+                // Apply event to currentState
+                currentState = JSON.parse(JSON.stringify(currentState)); // Deep copy
+
+                if (event.event_id === 'INIT') {
+                    // Start of a new round, reset parts of the state
+                    currentState.hands = event.hands || [[],[],[],[]];
+                    currentState.melds = [[],[],[],[]];
+                    currentState.rivers = [[],[],[],[]];
+                    currentState.scores = event.scores;
+                    currentState.oya = event.oya_player_id;
+                    currentState.round = event.round;
+                    currentState.honba = event.honba;
+                    currentState.riichi_sticks = event.riichi_sticks;
+                    currentState.dora_indicators = event.dora_indicators;
+                    currentState.last_event_description = `Round Start`;
+                } else if (event.event_id === 'DRAW') {
+                    currentState.hands[event.player].push(event.tile);
+                    currentState.hands[event.player].sort((a, b) => a - b);
+                    currentState.last_event_description = `Player ${event.player} draws`;
+                } else if (event.event_id === 'DISCARD') {
+                    const hand = currentState.hands[event.player];
+                    const tileIndex = hand.indexOf(event.tile);
+                    if (tileIndex > -1) hand.splice(tileIndex, 1);
+                    currentState.rivers[event.player].push({tile: event.tile, from: 'hand'});
+                    currentState.last_event_description = `Player ${event.player} discards ${tileIdToUnicode(event.tile)}`;
+                } else if (event.event_id === 'MELD') {
+                     currentState.last_event_description = `Player ${event.player} melds (${event.meld_info})`;
+                } else if (event.event_id === 'AGARI'){
+                    currentState.last_event_description = `Player ${event.winner} wins! (+${event.hand_value})`;
+                }
+
+                gameStateSnapshots.push(currentState);
+            }
+
+            eventSlider.max = gameEvents.length - 1;
+            updateEventIndex(0);
+        }
+        
+        function renderGameState(state) {
+            if (!state) return;
+            
+            // Render board info
+            const winds = ["East", "South", "West", "North"];
+            const roundWind = winds[Math.floor(state.round / 4)] || "East";
+            const roundNum = (state.round % 4) + 1;
+            document.getElementById('roundInfo').textContent = `${roundWind} ${roundNum}`;
+            document.getElementById('riichiSticks').textContent = state.riichi_sticks;
+            document.getElementById('honba').textContent = state.honba;
+
+            const doraContainer = document.getElementById('doraIndicator');
+            doraContainer.innerHTML = '';
+            if (state.dora_indicators && state.dora_indicators[0] !== undefined) {
+                doraContainer.appendChild(createTileElement(state.dora_indicators[0], false, true));
+            }
+            
+            // Render player info
+            const playerContainer = document.getElementById('player-info-container');
+            playerContainer.innerHTML = '';
+            for (let i = 0; i < 4; i++) {
+                const isOya = (i === state.oya);
+                const playerDiv = document.createElement('div');
+                playerDiv.className = 'border-t pt-2';
+                playerDiv.innerHTML = `
+                    <div class="flex justify-between items-center font-bold">
+                        <span>Player ${i} ${isOya ? '(Oya)' : ''}</span>
+                        <span class="font-mono text-lg">${state.scores[i]}</span>
+                    </div>
+                    <div class="player-area hand-area bg-gray-50 p-1 rounded-md mt-1"></div>
+                    <div class="player-area meld-area mt-1"></div>
+                `;
+                playerContainer.appendChild(playerDiv);
+
+                const handArea = playerDiv.querySelector('.hand-area');
+                handArea.innerHTML = '';
+                state.hands[i].forEach(tileId => handArea.appendChild(createTileElement(tileId)));
+
+                const meldArea = playerDiv.querySelector('.meld-area');
+                meldArea.innerHTML = '';
+                // Meld rendering logic to be added if meld data becomes available
+            }
+
+            // Render rivers
+            const riversContainer = document.getElementById('rivers-container');
+            riversContainer.innerHTML = '';
+            for(let i=0; i<4; i++){
+                const riverDiv = document.createElement('div');
+                riverDiv.innerHTML = `<div class="font-semibold">Player ${i}'s River</div>`;
+                const tilesDiv = document.createElement('div');
+                tilesDiv.className = "flex flex-wrap bg-gray-50 p-1 rounded";
+                state.rivers[i].forEach(discard => {
+                    const tileEl = createTileElement(discard.tile, false, true);
+                    tileEl.classList.add('river-tile');
+                    tilesDiv.appendChild(tileEl);
+                });
+                riverDiv.appendChild(tilesDiv);
+                riversContainer.appendChild(riverDiv);
+            }
+        }
+
+        function updateEventIndex(index) {
+            currentEventIndex = Math.max(0, Math.min(gameEvents.length - 1, index));
+            eventSlider.value = currentEventIndex;
+            eventCounter.textContent = `${currentEventIndex} / ${gameEvents.length - 1}`;
+            
+            renderGameState(gameStateSnapshots[currentEventIndex]);
+
+            prevBtn.disabled = currentEventIndex === 0;
+            nextBtn.disabled = currentEventIndex === gameEvents.length - 1;
+        }
+        
+        function togglePlay() {
+            isPlaying = !isPlaying;
+            if (isPlaying) {
+                playPauseBtn.textContent = 'Pause';
+                playInterval = setInterval(() => {
+                    if (currentEventIndex < gameEvents.length - 1) {
+                        updateEventIndex(currentEventIndex + 1);
+                    } else {
+                        togglePlay(); // Stop at the end
+                    }
+                }, 500);
+            } else {
+                playPauseBtn.textContent = 'Play';
+                clearInterval(playInterval);
+            }
+        }
+    </script>
+</body>
+</html>

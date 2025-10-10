@@ -1,21 +1,33 @@
 {
   "training": {
-    "num_games": 10,
+    "//": "学習を何ゲーム（半荘）行うか",
+    "num_games": 100,
+    "//_comment": "一度に学習する経験の数。PCのメモリに応じて調整(32, 64, 128など)",
     "batch_size": 64
   },
+  "rewards": {
+    "//": "ゲーム終了時の順位に応じた追加報酬（順位点）",
+    "ranking_points": [15, 5, -5, -15],
+    "//_comment": "誰もアガらずに半荘が終了した場合、上記の順位点をこの係数で減少させます。(例: 0.5 = 50%に)",
+    "all_draw_ranking_penalty_factor": 0.01
+  },
   "rules": {
+    "//": "麻雀のルール設定",
     "has_aka_dora": true,
     "has_open_tanyao": true,
     "has_double_yakuman": true
   },
   "model": {
+    "//": "モデルの保存に関する設定",
     "model_name": "tenho_model",
     "save_models": true,
     "model_save_dir": "models",
-    "save_interval_games": 1
+    "//_comment": "何ゲームごとにモデルを保存するか",
+    "save_interval_games": 10
   },
   "logging": {
-    "save_game_logs": false,
+    "//": "ログの保存に関する設定",
+    "save_game_logs": true,
     "game_log_dir": "logs/games",
     "save_stats": true,
     "stats_file": "logs/game_stats.jsonl",

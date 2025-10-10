@@ -9,6 +9,7 @@ Transformerベースの麻雀AIをローカル環境で強化学習させるこ�
 - 動作環境
 - セットアップ手順
 - 実行方法
+- 学習状況の確認
 - ディレクトリ構成
 - ドキュメント
 - 更新履歴
@@ -72,6 +73,35 @@ python main.py
 
 ---
 
+## 学習状況の確認
+
+本プロジェクトでは、AIの学習進捗や対戦内容を可視化するための2つのツールを提供しています。
+
+1. 対戦内容のリプレイ (GUI Viewer)  
+自己対戦で生成されたログファイルをGUIで再生し、AIの打牌を一手ずつ確認できます。プロジェクトルートにある `mahjong_viewer.html` をWebブラウザで開きます。ファイル選択ボタンを押し、 `logs/games/` ディレクトリに保存されている対戦ログ（.jsonファイル）を選択します。再生コントロールを使って、対局を再生します。
+
+2. 学習進捗のグラフ確認 (TensorBoard)  
+学習の損失（loss）など、AIの長期的な学習トレンドをグラフで分析できます。
+
+- 新しいターミナルを起動します（`main.py` を実行しているターミナルとは別に）。
+- プロジェクトの仮想環境を有効化します。
+```powershell
+# プロジェクトルートへ移動
+cd c:\Work\Reinforcement-LearningOfMahjong
+
+# 仮想環境を有効化
+.\.venv\Scripts\Activate.ps1
+```
+
+- 以下のコマンドでTensorBoardを起動します。
+```powershell
+tensorboard --logdir logs/tensorboard
+```
+
+- ターミナルに表示されたURL（通常は http://localhost:6006/）をWebブラウザで開きます。
+
+---
+
 ## ディレクトリ構成（概要）
 ```
 .
@@ -79,7 +109,11 @@ python main.py
 ├── README.md
 ├── main.py
 ├── requirements.txt
+├── mahjong_viewer.html    # <-- NEW: 対戦再生GUI
 ├── models/                # (任意) initial_model.keras を置く
+├── logs/
+│   ├── games/             # 対戦ログ(.json)が保存される
+│   └── tensorboard/       # 学習グラフ用のデータが保存される
 ├── src/
 │   ├── agent/             # モデル定義・思考エンジン
 │   ├── constants.py
@@ -106,4 +140,4 @@ python main.py
 
 ---
 
-最終更新: 2025-10-08
+最終更新: 2025-10-10
