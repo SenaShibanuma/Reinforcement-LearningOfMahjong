@@ -129,7 +129,6 @@ class Trainer:
             
             round_experiences = [[] for _ in range(4)]
 
-            # --- START: MODIFICATION ---
             # ログ表示を分かりやすく修正
             round_num_in_wind = (game_state['round'] % 4) + 1
             wind_num = game_state['round'] // 4
@@ -138,7 +137,6 @@ class Trainer:
             round_name = f"{round_wind} {round_num_in_wind}"
             
             print(f"\n======== Starting Round: {round_name}, Honba: {game_state['honba']}, Riichi Sticks: {game_state['riichi_sticks']} ========")
-            # --- END: MODIFICATION ---
             print(f"Oya is Player {game_state['oya_player_id']}. Initial Scores: {game_state['scores']}")
 
             while not round_done:
@@ -158,10 +156,12 @@ class Trainer:
                 current_agent = self.agents[current_player_id]
                 selected_action, _ = current_agent.choose_action(context, choices, current_player_id, is_training=True)
 
-                turn = self.env.game_state.get('turn_count', 0)
-                if self.env.game_phase == 'DISCARD':
-                    print(f" -> Turn {turn}: Player {current_player_id} draws and considers...")
-                print(f"    Action: Player {current_player_id} chooses {selected_action}")
+                # --- START: MODIFICATION - 不要なログをコメントアウト ---
+                # turn = self.env.game_state.get('turn_count', 0)
+                # if self.env.game_phase == 'DISCARD':
+                #     print(f" -> Turn {turn}: Player {current_player_id} draws and considers...")
+                # print(f"    Action: Player {current_player_id} chooses {selected_action}")
+                # --- END: MODIFICATION ---
                 
                 if selected_action not in choices:
                     print(f"Error: Agent selected an invalid action '{selected_action}'. Defaulting to first choice.")
@@ -203,6 +203,38 @@ class Trainer:
 
             game_state = self.env.game_state
             print(f"======== Round Ended. Reason: {info.get('reason')} ========")
+            
+            # --- START: MODIFICATION - 局終了時に手牌と結果をログ出力 ---
+            print("--- Final Hands ---")
+            for p_id in range(4):
+                hand_136 = self.env.game_state['hands'][p_id]
+                melds = self.env.game_state['melds'][p_id]
+                
+                # 手牌を読みやすい文字列に変換
+                hand_str = TilesConverter.to_one_line_string(hand_136)
+                melds_str = ""
+                if melds:
+                    melds_str = " Melds: ["
+                    meld_parts = []
+                    for meld in melds:
+                        meld_parts.append(TilesConverter.to_one_line_string(meld.tiles))
+                    melds_str += ", ".join(meld_parts) + "]"
+
+                print(f"Player {p_id}: {hand_str}{melds_str}")
+            
+            # アガリが発生した場合、詳細情報を表示
+            if info.get('reason') == 'agari' and self.env.game_state.get('agari_stats'):
+                try:
+                    agari_info = self.env.game_state['agari_stats'][-1]
+                    winner = agari_info['winner']
+                    yaku_list = ", ".join(agari_info['yaku'])
+                    print(f"  -> Agari Details (Player {winner}):")
+                    print(f"     Hand Value: {agari_info['han']} Han, {agari_info['fu']} Fu ({agari_info['cost']} points)")
+                    print(f"     Yaku: {yaku_list}")
+                except (IndexError, KeyError) as e:
+                    print(f"  -> Could not display agari details due to missing info: {e}")
+            print("-------------------")
+            # --- END: MODIFICATION ---
             
             if info.get('game_over', False):
                 game_over = True
@@ -366,4 +398,3 @@ class Trainer:
                  print(f"======== Agari stats saved to {stats_file} ========")
         except Exception as e:
             print(f"Error saving stats file: {e}")
-

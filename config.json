@@ -1,7 +1,7 @@
 {
   "//comment_training": "Settings for the training loop",
   "training": {
-    "num_games": 10,
+    "num_games": 50,
     "batch_size": 64
   },
   "//comment_game": "Settings for the game itself",
@@ -32,7 +32,7 @@
     "model_name": "tenho_model",
     "save_models": true,
     "model_save_dir": "models",
-    "save_interval_games": 1
+    "save_interval_games": 5
   },
   "//comment_logging": "Settings for logging and statistics",
   "logging": {
