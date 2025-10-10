@@ -1,32 +1,41 @@
 {
+  "//comment_training": "Settings for the training loop",
   "training": {
-    "//": "学習を何ゲーム（半荘）行うか",
-    "num_games": 100,
-    "//_comment": "一度に学習する経験の数。PCのメモリに応じて調整(32, 64, 128など)",
+    "num_games": 10,
     "batch_size": 64
   },
-  "rewards": {
-    "//": "ゲーム終了時の順位に応じた追加報酬（順位点）",
-    "ranking_points": [15, 5, -5, -15],
-    "//_comment": "誰もアガらずに半荘が終了した場合、上記の順位点をこの係数で減少させます。(例: 0.5 = 50%に)",
-    "all_draw_ranking_penalty_factor": 0.01
+  "//comment_game": "Settings for the game itself",
+  "game": {
+    "//comment_num_rounds": "Number of rounds in a game. 8 for Tonpuusen (East only), 16 for Hanchan (East & South).",
+    "num_rounds": 8
   },
+  "//comment_rewards": "Settings for reward shaping",
+  "rewards": {
+    "//comment_ranking": "Points awarded for final ranks (1st to 4th)",
+    "ranking_points": [
+      15,
+      5,
+      -5,
+      -15
+    ],
+    "//comment_penalty": "Multiplier for ranking points if the game ends with no one winning a hand (e.g., all rounds are draws). 0.5 means rewards/penalties are halved.",
+    "all_draw_ranking_penalty_factor": 0.5
+  },
+  "//comment_rules": "Mahjong rules settings",
   "rules": {
-    "//": "麻雀のルール設定",
     "has_aka_dora": true,
     "has_open_tanyao": true,
     "has_double_yakuman": true
   },
+  "//comment_model": "Settings for model saving",
   "model": {
-    "//": "モデルの保存に関する設定",
     "model_name": "tenho_model",
     "save_models": true,
     "model_save_dir": "models",
-    "//_comment": "何ゲームごとにモデルを保存するか",
-    "save_interval_games": 10
+    "save_interval_games": 1
   },
+  "//comment_logging": "Settings for logging and statistics",
   "logging": {
-    "//": "ログの保存に関する設定",
     "save_game_logs": true,
     "game_log_dir": "logs/games",
     "save_stats": true,

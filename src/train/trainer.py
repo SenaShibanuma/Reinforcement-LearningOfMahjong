@@ -38,7 +38,6 @@ class Trainer:
         model_name = model_config.get('model_name', 'model')
         model_dir = model_config.get('model_save_dir', 'models')
 
-        # --- START: MODIFICATION ---
         # 起動時にロードするモデルパスのみを決定する
         print(f"Searching for latest model to load with base name '{model_name}' in '{model_dir}'...")
         model_path, _ = self._find_latest_model(model_dir, model_name)
@@ -49,7 +48,6 @@ class Trainer:
             if os.path.exists(base_model_path):
                 print(f"Found base model: {base_model_path}")
                 model_path = base_model_path
-        # --- END: MODIFICATION ---
 
         if model_path:
             print(f"Loading model from: {model_path}")
@@ -131,8 +129,16 @@ class Trainer:
             
             round_experiences = [[] for _ in range(4)]
 
-            round_name = f"East {(game_state['round'] // 4) + 1}-{game_state['round'] % 4 + 1}" if game_state['round'] < 4 else f"South {( (game_state['round']-4) // 4) + 1}-{(game_state['round']-4) % 4 + 1}"
+            # --- START: MODIFICATION ---
+            # ログ表示を分かりやすく修正
+            round_num_in_wind = (game_state['round'] % 4) + 1
+            wind_num = game_state['round'] // 4
+            winds = ["East", "South", "West", "North"]
+            round_wind = winds[wind_num]
+            round_name = f"{round_wind} {round_num_in_wind}"
+            
             print(f"\n======== Starting Round: {round_name}, Honba: {game_state['honba']}, Riichi Sticks: {game_state['riichi_sticks']} ========")
+            # --- END: MODIFICATION ---
             print(f"Oya is Player {game_state['oya_player_id']}. Initial Scores: {game_state['scores']}")
 
             while not round_done:
@@ -278,7 +284,6 @@ class Trainer:
             for agent in self.agents[1:]:
                 agent.model.set_weights(weights)
 
-            # --- START: MODIFICATION ---
             # モデルを保存し、保存された場合はそのバージョン番号を取得
             saved_version = self.save_model(i) # ループカウンタ `i` を渡す
             
@@ -293,7 +298,6 @@ class Trainer:
                     scores = np.array(final_game_state['scores'])
                     score_std_dev = np.std(scores)
                     tf.summary.scalar('score_standard_deviation', score_std_dev, step=saved_version)
-            # --- END: MODIFICATION ---
 
     def save_log(self, game_state, game_version):
         log_config = self.config.get('logging', {})
@@ -314,7 +318,6 @@ class Trainer:
         except Exception as e:
             print(f"Error saving game log file: {e}")
             
-    # --- START: MODIFICATION ---
     def save_model(self, loop_counter):
         """
         現在のモデルを保存する。保存した場合、新しいバージョン番号を返す。
@@ -344,7 +347,6 @@ class Trainer:
                 return None
         
         return None # 保存間隔外なのでNoneを返す
-    # --- END: MODIFICATION ---
 
     def save_stats(self, game_state, game_version):
         log_config = self.config.get('logging', {})

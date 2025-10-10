@@ -45,10 +45,12 @@ class MahjongEnv:
         if rules:
             self.rules.update(rules)
 
-        num_rounds = self.config.get('game', {}).get('num_rounds', 8)
+        # --- START: MODIFICATION ---
+        self.num_rounds = self.config.get('game', {}).get('num_rounds', 8)
         print(
-            f"MahjongEnv: Initialized for {num_rounds}-round game with rules: {self.rules}"
+            f"MahjongEnv: Initialized for {self.num_rounds}-round game with rules: {self.rules}"
         )
+        # --- END: MODIFICATION ---
 
     def _is_yaochuhai(self, tile_136):
         """牌が么九牌（ヤオチュウハイ）かどうかを判定する"""
@@ -178,16 +180,17 @@ class MahjongEnv:
         for tile in unique_tiles:
             actions.append(f"DISCARD_{tile}")
 
-        hand_34 = TilesConverter.to_34_array(hand_136)
-        for tile_34, count in enumerate(hand_34):
-            if count == 4:
-                actions.append(f"ACTION_ANKAN_{tile_34*4}")
+        if self.game_state['wall']:
+            hand_34 = TilesConverter.to_34_array(hand_136)
+            for tile_34, count in enumerate(hand_34):
+                if count == 4:
+                    actions.append(f"ACTION_ANKAN_{tile_34*4}")
 
-        if last_drawn_tile is not None:
-            for meld in self.game_state['melds'][player_idx]:
-                if meld.type == Meld.PON and meld.tiles[
-                        0] // 4 == last_drawn_tile // 4:
-                    actions.append(f"ACTION_KAKAN_{last_drawn_tile}")
+            if last_drawn_tile is not None:
+                for meld in self.game_state['melds'][player_idx]:
+                    if meld.type == Meld.PON and meld.tiles[
+                            0] // 4 == last_drawn_tile // 4:
+                        actions.append(f"ACTION_KAKAN_{last_drawn_tile}")
 
         is_menzen = not any(meld.opened
                             for meld in self.game_state['melds'][player_idx])
@@ -195,19 +198,21 @@ class MahjongEnv:
         if not self.game_state['is_riichi'][player_idx] and is_menzen:
             if self._is_tenpai(player_idx):
                 for tile_to_discard in unique_tiles:
-                    # どの牌を切っても聴牌を維持できるかチェック
+                    # --- START: MODIFICATION ---
+                    # 副作用をなくすため、手牌のコピーでシミュレーションする
                     temp_hand = hand_136[:]
                     temp_hand.remove(tile_to_discard)
                     
-                    # リーチ後の手牌を一時的に保存し、新しい状態で聴牌判定
-                    original_hand = self.game_state['hands'][player_idx]
-                    self.game_state['hands'][player_idx] = temp_hand
-                    
-                    if self._is_tenpai(player_idx):
-                        actions.append(f"ACTION_RIICHI_{tile_to_discard}")
-
-                    # 手牌を元に戻す
-                    self.game_state['hands'][player_idx] = original_hand
+                    try:
+                        shanten = self.shanten_calculator.calculate_shanten(
+                            TilesConverter.to_34_array(temp_hand)
+                        )
+                        if shanten == 0:
+                            actions.append(f"ACTION_RIICHI_{tile_to_discard}")
+                    except:
+                        # 計算エラーは無視して続ける
+                        continue
+                    # --- END: MODIFICATION ---
 
         return list(dict.fromkeys(actions))
 
@@ -227,8 +232,9 @@ class MahjongEnv:
         if hand_34[discarded_tile_34] >= 2 and not self.game_state['is_riichi'][player_idx]:
             actions.append("ACTION_PUNG")
 
-        if hand_34[discarded_tile_34] >= 3 and not self.game_state['is_riichi'][player_idx]:
-            actions.append("ACTION_DAIMINKAN")
+        if self.game_state['wall']:
+            if hand_34[discarded_tile_34] >= 3 and not self.game_state['is_riichi'][player_idx]:
+                actions.append("ACTION_DAIMINKAN")
 
         discarder_idx = self.game_state['last_discarder']
         if (discarder_idx + 1) % self.num_players == player_idx and not self.game_state['is_riichi'][player_idx]:
@@ -528,7 +534,6 @@ class MahjongEnv:
         self.game_state['riichi_sticks'] = 0
 
         if result:
-            # --- START: MODIFICATION ---
             dora_count = 0
             for yaku in result.yaku:
                 if 'Dora' in yaku.name:
@@ -543,7 +548,6 @@ class MahjongEnv:
                 'yaku': [y.name for y in result.yaku],
                 'dora': dora_count
             }
-            # --- END: MODIFICATION ---
             self.game_state['agari_stats'].append(stat)
 
         self.game_state['events'].append({
@@ -561,9 +565,7 @@ class MahjongEnv:
             self.game_state['oya_player_id'] = (
                 self.game_state['oya_player_id'] + 1) % self.num_players
 
-        num_rounds = self.config.get('game', {}).get('num_rounds', 8)
-        game_over = self.game_state['round'] >= num_rounds
-
+        game_over = self.game_state['round'] >= self.num_rounds
         if any(score < 0 for score in self.game_state['scores']):
             print("  -> A player's score is below zero. Game ends (Tobi).")
             game_over = True
@@ -691,7 +693,10 @@ class MahjongEnv:
         hand.sort()
         self.game_state['last_drawn_tile'] = rinshan_tile
 
-        self.game_state['dead_wall'].append(self.game_state['wall'].pop())
+        if self.game_state['wall']:
+            self.game_state['dead_wall'].append(self.game_state['wall'].pop())
+        else:
+            print("  -> Wall is empty. Cannot replenish dead wall after Kan.")
 
         self.game_state['kan_count'] += 1
         new_dora_indicator = self.game_state['dead_wall'][
@@ -750,8 +755,10 @@ class MahjongEnv:
                     self.game_state['oya_player_id'] + 1) % self.num_players
                 self.game_state['round'] += 1
 
-            num_rounds = self.config.get('game', {}).get('num_rounds', 8)
-            game_over = self.game_state['round'] >= num_rounds
+            game_over = self.game_state['round'] >= self.num_rounds
+            if any(score < 0 for score in self.game_state['scores']):
+                 print("  -> A player's score is below zero. Game ends (Tobi).")
+                 game_over = True
             
             return (self.game_state['events'], []), rewards, True, {
                 'reason': 'nagashi_mangan',
@@ -784,9 +791,7 @@ class MahjongEnv:
              self.game_state['round'] += 1
              self.game_state['oya_player_id'] = (self.game_state['oya_player_id'] + 1) % self.num_players
 
-        num_rounds = self.config.get('game', {}).get('num_rounds', 8)
-        game_over = self.game_state['round'] >= num_rounds
-
+        game_over = self.game_state['round'] >= self.num_rounds
         if any(score < 0 for score in self.game_state['scores']):
             print("  -> A player's score is below zero. Game ends (Tobi).")
             game_over = True
@@ -802,12 +807,9 @@ class MahjongEnv:
         print(f"  -> Abortive draw due to {reason}.")
         self.game_state['honba'] += 1
 
-        num_rounds = self.config.get('game', {}).get('num_rounds', 8)
-        game_over = self.game_state['round'] >= num_rounds
-        
         return (self.game_state['events'], []), [0] * self.num_players, True, {
             'reason': reason,
-            'game_over': game_over
+            'game_over': False
         }
 
     def _process_pass(self):
