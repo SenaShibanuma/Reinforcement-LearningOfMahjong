@@ -1,46 +1,38 @@
 {
-  "//comment_training": "Settings for the training loop",
-  "training": {
-    "num_games": 50,
-    "batch_size": 64
-  },
-  "//comment_game": "Settings for the game itself",
-  "game": {
-    "//comment_num_rounds": "Number of rounds in a game. 8 for Tonpuusen (East only), 16 for Hanchan (East & South).",
-    "num_rounds": 8
-  },
-  "//comment_rewards": "Settings for reward shaping",
-  "rewards": {
-    "//comment_ranking": "Points awarded for final ranks (1st to 4th)",
-    "ranking_points": [
-      15,
-      5,
-      -5,
-      -15
-    ],
-    "//comment_penalty": "Multiplier for ranking points if the game ends with no one winning a hand (e.g., all rounds are draws). 0.5 means rewards/penalties are halved.",
-    "all_draw_ranking_penalty_factor": 0.5
-  },
-  "//comment_rules": "Mahjong rules settings",
-  "rules": {
-    "has_aka_dora": true,
-    "has_open_tanyao": true,
-    "has_double_yakuman": true
-  },
-  "//comment_model": "Settings for model saving",
-  "model": {
-    "model_name": "tenho_model",
-    "save_models": true,
-    "model_save_dir": "models",
-    "save_interval_games": 5
-  },
-  "//comment_logging": "Settings for logging and statistics",
-  "logging": {
-    "save_game_logs": true,
-    "game_log_dir": "logs/games",
-    "save_stats": true,
-    "stats_file": "logs/game_stats.jsonl",
-    "tensorboard_log_dir": "logs/tensorboard"
-  }
+    "training": {
+        "num_games": 50,
+        "batch_size": 64
+    },
+    "game": {
+        "num_rounds": 8
+    },
+    "rewards": {
+        "ranking_points": [
+            15,
+            5,
+            -5,
+            -15
+        ],
+        "all_draw_ranking_penalty_factor": 0.5
+    },
+    "rules": {
+        "has_aka_dora": true,
+        "has_open_tanyao": true,
+        "has_double_yakuman": true
+    },
+    "model": {
+        "model_name": "tenho_model",
+        "save_models": true,
+        "model_save_dir": "models",
+        "save_interval_games": 5
+    },
+    "logging": {
+        "save_game_logs": true,
+        "game_log_dir": "logs/games",
+        "save_stats": true,
+        "stats_file": "logs/game_stats.jsonl",
+        "tensorboard_log_dir": "logs/tensorboard"
+    },
+    "num_agents": 4
 }
 

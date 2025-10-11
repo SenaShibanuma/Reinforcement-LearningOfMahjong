@@ -1,6 +1,15 @@
-tensorflow-cpu==2.10
-tensorflow-directml-plugin
-mahjong
-pytest
+# Downgraded numpy for compatibility with TensorFlow 2.10
 numpy==1.23.5
+mahjong==1.1.11
+
+# Machine Learning Framework
+# Downgraded to a version that does not require AVX CPU instructions
+tensorflow-cpu==2.10
+
+# Development and Testing
+pytest
 tensorboard
+tqdm
+
+# GPU Acceleration for AMD on Windows
+tensorflow-directml-plugin
