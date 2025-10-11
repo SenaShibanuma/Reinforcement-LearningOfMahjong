@@ -74,28 +74,28 @@ def test_is_aka_dora_functionality():
     print("\nTEST: is_aka_dora関数が赤ドラを正しく識別するか")
 
     # 赤5m (FIVE_RED_MAN) は aka_dora_list に含まれる
-    assert is_aka_dora(FIVE_RED_MAN, True) == True
-    assert is_aka_dora(FIVE_RED_MAN, False) == False # aka_enabled=False の場合は常にFalse
+    assert is_aka_dora(FIVE_RED_MAN, True)
+    assert not is_aka_dora(FIVE_RED_MAN, False) # aka_enabled=False の場合は常にFalse
 
     # 赤5p (FIVE_RED_PIN)
-    assert is_aka_dora(FIVE_RED_PIN, True) == True
-    assert is_aka_dora(FIVE_RED_PIN, False) == False
+    assert is_aka_dora(FIVE_RED_PIN, True)
+    assert not is_aka_dora(FIVE_RED_PIN, False)
 
     # 赤5s (FIVE_RED_SOU)
-    assert is_aka_dora(FIVE_RED_SOU, True) == True
-    assert is_aka_dora(FIVE_RED_SOU, False) == False
+    assert is_aka_dora(FIVE_RED_SOU, True)
+    assert not is_aka_dora(FIVE_RED_SOU, False)
 
     # 通常の5m (FIVE_RED_MAN + 1) は aka_dora_list に含まれない
-    assert is_aka_dora(FIVE_RED_MAN + 1, True) == False
-    assert is_aka_dora(FIVE_RED_MAN + 1, False) == False
+    assert not is_aka_dora(FIVE_RED_MAN + 1, True)
+    assert not is_aka_dora(FIVE_RED_MAN + 1, False)
 
     # 通常の5p (FIVE_RED_PIN + 1) は aka_dora_list に含まれない
-    assert is_aka_dora(FIVE_RED_PIN + 1, True) == False
-    assert is_aka_dora(FIVE_RED_PIN + 1, False) == False
+    assert not is_aka_dora(FIVE_RED_PIN + 1, True)
+    assert not is_aka_dora(FIVE_RED_PIN + 1, False)
 
     # 通常の5s (FIVE_RED_SOU + 1) は aka_dora_list に含まれない
-    assert is_aka_dora(FIVE_RED_SOU + 1, True) == False
-    assert is_aka_dora(FIVE_RED_SOU + 1, False) == False
+    assert not is_aka_dora(FIVE_RED_SOU + 1, True)
+    assert not is_aka_dora(FIVE_RED_SOU + 1, False)
 
     print("  is_aka_dora関数のテストが完了しました。")
 
@@ -104,24 +104,24 @@ def test_hand_value_with_and_without_aka_dora():
     print("\nTEST: 赤ドラの有無による手計算結果（翻、符、点数）の比較")
     calculator = HandCalculator()
 
-    # --- 正しい平和（ピンフ）の構成 ---
-    # 手牌: 123m 99p 234s 789s 40s (3s or 6s 待ちの両面待ち)
-    # 和了牌: 6s (ツモ)
-    # ドラ表示牌: 1s (ドラは 2s)
+    # --- Correct Pinfu Hand Setup ---
+    # Hand: 234m 22p 456p 45s 789s (open wait on 3s or 6s)
+    # Winning Tile: 6s (Tsumo)
+    # Dora Indicator: 1p (Dora is 2p, hand has a pair of 2p)
+    # With Aka Dora, the 5s is red.
 
-    # --- 赤ドラありのケース ---
-    # 役: 平和(1), 門前清自摸和(1), ドラ(1, 2s), 赤ドラ(1, 0s) = 4翻
+    # --- Case with Aka Dora ---
+    # Yaku: Pinfu(1), Tsumo(1), Dora(2, from 22p), Aka Dora(1, 0s) = 5 Han
     hand_tiles_13_with_aka = TilesConverter.string_to_136_array(
-        man="123", pin="99", sou="23478940"
+        man="234", pin="22456", sou="40789", has_aka_dora=True  # 0s is red 5s
     )
     win_tile = TilesConverter.string_to_136_array(sou="6")[0]
-    dora_indicators = [TilesConverter.string_to_136_array(sou="1")[0]]
+    dora_indicators = [TilesConverter.string_to_136_array(pin="1")[0]] # Dora is 2p
 
-    # estimate_hand_valueには和了牌を含む14牌を渡す
-    # mahjongライブラリのHandCalculatorが赤ドラを含むと和了形を誤認識する問題への対応
-    # 赤ドラを通常の5に変換してから計算し、後から赤ドラの数を翻に加算する
+    # As a workaround for the library misidentifying the hand shape with aka dora,
+    # we convert aka dora to a normal 5 for calculation and add the aka dora han count later.
     hand_tiles_13_without_aka_for_calc = [
-        t if t != 88 else 89 for t in hand_tiles_13_with_aka
+        t if t != FIVE_RED_SOU else FIVE_RED_SOU + 1 for t in hand_tiles_13_with_aka
     ]
     full_hand_with_aka_for_calc = sorted(
         hand_tiles_13_without_aka_for_calc + [win_tile]
@@ -134,17 +134,18 @@ def test_hand_value_with_and_without_aka_dora():
     )
     assert (
         result_with_aka.error is None
-    ), f"赤ドラありの手で計算エラー: {result_with_aka.error}"
+    ), f"Hand calculation failed with aka dora: {result_with_aka.error}"
 
-    # 赤ドラの数を翻に加算
-    aka_dora_count = hand_tiles_13_with_aka.count(88)
+    # Manually add aka dora count to the han
+    aka_dora_count = hand_tiles_13_with_aka.count(FIVE_RED_SOU)
     total_han_with_aka = result_with_aka.han + aka_dora_count
-    assert total_han_with_aka == 4, f"赤ドラありの翻数が違います: {total_han_with_aka}"
+    # Expected: Pinfu(1) + Tsumo(1) + Dora(2) + Aka(1) = 5 han
+    assert total_han_with_aka == 5, f"Incorrect han count with aka dora: {total_han_with_aka}"
 
-    # --- 赤ドラなしのケース ---
-    # 役: 平和(1), 門前清自摸和(1), ドラ(1, 2s) = 3翻
+    # --- Case without Aka Dora ---
+    # Yaku: Pinfu(1), Tsumo(1), Dora(2, from 22p) = 4 Han
     hand_tiles_13_without_aka = TilesConverter.string_to_136_array(
-        man="123", pin="99", sou="23478945"
+        man="234", pin="22456", sou="45789" # Normal 5s
     )
     full_hand_without_aka = sorted(hand_tiles_13_without_aka + [win_tile])
     result_without_aka = calculator.estimate_hand_value(
@@ -155,12 +156,15 @@ def test_hand_value_with_and_without_aka_dora():
     )
     assert (
         result_without_aka.error is None
-    ), f"赤ドラなしの手で計算エラー: {result_without_aka.error}"
+    ), f"Hand calculation failed without aka dora: {result_without_aka.error}"
     print(
-        f"  赤ドラなしの手: {result_without_aka.han}翻 {result_without_aka.fu}符, 点数: {result_without_aka.cost['main']} (ツモ)"
+        f"  Hand without aka: {result_without_aka.han} han {result_without_aka.fu} fu, Cost: {result_without_aka.cost['main']} (Tsumo)"
     )
-    assert result_without_aka.han == 3
-    assert result_without_aka.fu == 20
+    # Expected: Pinfu(1) + Tsumo(1) + Dora(2) = 4 han
+    assert result_without_aka.han == 4
+    assert result_without_aka.fu == 20 # Pinfu Tsumo is always 20 fu
 
-    assert result_with_aka.han == result_without_aka.han + 1
-    print("  検証: 赤ドラの有無で翻数が正しく1翻違うことを確認しました。")
+    # Compare the final total han with the han from the non-aka hand.
+    assert total_han_with_aka == result_without_aka.han + 1
+    print("  Verified: The han count is correctly 1 han higher with aka dora.")
+
