@@ -9,6 +9,7 @@ Transformerベースの麻雀AIをローカル環境で強化学習させるこ�
 - 動作環境
 - セットアップ手順
 - 実行方法
+- **mahjongライブラリの基本的な使い方**
 - 学習状況の確認
 - ディレクトリ構成
 - ドキュメント
@@ -73,6 +74,54 @@ python main.py
 
 ---
 
+## mahjongライブラリの基本的な使い方
+
+本プロジェクトで利用している `mahjong` ライブラリの主要な機能（シャンテン数計算、点数計算など）の簡単な使用例を以下に示します。
+
+- **シャンテン数の計算**:
+  ```python
+  from mahjong.tile import TilesConverter
+  from mahjong.shanten import Shanten
+
+  # 聴牌まであと1枚の手牌（一向聴）
+  hand_tiles = TilesConverter.string_to_136_array(man='123', pin='456', sou='789', honors='112')
+  hand_34_array = TilesConverter.to_34_array(hand_tiles)
+
+  shanten_calculator = Shanten()
+  shanten_result = shanten_calculator.calculate_shanten(hand_34_array)
+
+  print(f"シャンテン数: {shanten_result}") # -> 1
+  ```
+
+- **点数の計算**:
+  ```python
+  from mahjong.tile import TilesConverter
+  from mahjong.hand_calculating.hand import HandCalculator
+  from mahjong.hand_calculating.hand_config import HandConfig
+
+  # 平和・ツモ・ドラ1 の手牌
+  calculator = HandCalculator()
+  hand_tiles = TilesConverter.string_to_136_array(man='234', pin='567', sou='789', honors='11')
+  win_tile = TilesConverter.string_to_136_array(pin='4')[0]
+
+  result = calculator.estimate_hand_value(
+      sorted(hand_tiles + [win_tile]),
+      win_tile,
+      config=HandConfig(is_tsumo=True)
+  )
+
+  if not result.error:
+      print(f"翻: {result.han}, 符: {result.fu}")
+      print(f"点数: {result.cost['main']}点")
+  else:
+      print(f"エラー: {result.error}")
+  ```
+
+より詳細な使い方については、以下のドキュメントを参照してください。
+- [mahjongライブラリ利用ガイド](./doc/mahjong_library_usage.md)
+
+---
+
 ## 学習状況の確認
 
 本プロジェクトでは、AIの学習進捗や対戦内容を可視化するための2つのツールを提供しています。
@@ -127,10 +176,11 @@ tensorboard --logdir logs/tensorboard
 ---
 
 ## ドキュメント
-- doc/architecture.md — システム設計  
-- doc/model_architecture.md — モデル入出力仕様  
-- doc/code_structure.md — コード構造説明  
-- doc/development_plan.md — 開発ロードマップ
+- [システム設計](./doc/architecture.md)
+- [モデル入出力仕様](./doc/model_architecture.md)
+- [コード構造説明](./doc/code_structure.md)
+- [開発ロードマップ](./doc/development_plan.md)
+- **[NEW]** [mahjongライブラリ利用ガイド](./doc/mahjong_library_usage.md)
 
 ---
 
@@ -140,4 +190,4 @@ tensorboard --logdir logs/tensorboard
 
 ---
 
-最終更新: 2025-10-10
+最終更新: 2025-10-11
